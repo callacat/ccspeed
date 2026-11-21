@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -309,6 +310,15 @@ func currentCreds() (string, string) { return apiAuthVal, apiCommVal }
 // ---------- 启动 ----------
 
 func startWeb(addr string) {
+	// StartWeb 兼容 ":port" 与 "host:port" 两种形态（net.Listen 已原生支持）；
+	// 这里只把 port 超范围翻译成人话 —— go stdlib 的 "invalid port" 不报具体值、易误判成 host 被拆丢。
+	if _, port, err := net.SplitHostPort(addr); err != nil {
+		log.Printf("web console disabled: -web %q 需要 host:port 或 :port 形态: %v", addr, err)
+		return
+	} else if n, e := strconv.Atoi(port); e != nil || n < 0 || n > 65535 {
+		log.Printf("web console disabled: -web %q 端口 %s 超出合法范围 0-65535", addr, port)
+		return
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {

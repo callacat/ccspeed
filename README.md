@@ -55,7 +55,7 @@ export CC_COMM='...'      # comm 头（等价 -api-comm）
 
 ```text
 -listen       SOCKS5 监听地址        默认 127.0.0.1:1081
--web          Web 控制台监听地址     默认 127.0.0.1:28981（空=禁用）
+-web          Web 控制台监听地址     默认 127.0.0.1:28981（空=禁用）支持 host:port 与 :port 两种形态；端口须在 0-65535
 -socks-user   SOCKS5 用户名          默认空 = no-auth（保持原行为）
 -socks-pass   SOCKS5 口令            默认空 = no-auth
 -node         固定 CC 节点 host:port 空 = API 拉取+测速选最快
