@@ -1,0 +1,12 @@
+# 本地凭据 / 配置：绝不入库
+secrets.go.local
+*ccspeed*.json
+# 本地构建产物
+/ccspeed
+/ccspeed.exe
+/ccspeed-linux-*
+/ccspeed-windows-*
+# 编辑器
+.idea/
+.vscode/
+.DS_Store

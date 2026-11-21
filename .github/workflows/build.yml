@@ -1,0 +1,91 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  vet:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - name: go vet
+        run: go vet ./...
+      - name: gofmt check
+        run: |
+          out=$(gofmt -l .)
+          if [ -n "$out" ]; then echo "$out"; exit 1; fi
+
+  build:
+    needs: vet
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: windows
+            goarch: amd64
+            out: ccspeed-windows-amd64.exe
+          - goos: linux
+            goarch: amd64
+            out: ccspeed-linux-amd64
+          - goos: linux
+            goarch: arm64
+            out: ccspeed-linux-arm64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+        env:
+          CGO_ENABLED: '0'
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          set -e
+          go build -trimpath -ldflags='-s -w' -o "dist/${{ matrix.out }}" .
+          sha256sum "dist/${{ matrix.out }}" | tee "dist/${{ matrix.out }}.sha256"
+          file "dist/${{ matrix.out }}"
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.out }}
+          path: dist/
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifacts@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Show checksums
+        run: ls -l dist && cat dist/*.sha256
+      - name: Create Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          gh release create "${{ github.ref_name }}" \
+            --title "ccspeed ${{ github.ref_name }}" \
+            --notes "$(printf 'ccspeed %s\n\n- Web 控制台 + 内嵌 UI（凭据 / 选节点 / 日志 / SOCKS5 鉴权）\n- 纯 Go stdlib，零第三方依赖；CGO_ENABLED=0 静态构建\n- 二进制未经代码签名，Windows SmartScreen 首次会拦（见 README §6）\n' "${{ github.ref_name }}")" \
+            dist/ccspeed-windows-amd64.exe \
+            dist/ccspeed-windows-amd64.exe.sha256 \
+            dist/ccspeed-linux-amd64 \
+            dist/ccspeed-linux-amd64.sha256 \
+            dist/ccspeed-linux-arm64 \
+            dist/ccspeed-linux-arm64.sha256
