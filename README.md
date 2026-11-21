@@ -51,6 +51,11 @@ export CC_COMM='...'      # comm 头（等价 -api-comm）
 凭据也可以由控制台表单写入 `<可执行文件>.json`（权限 600，路径见控制台
 「凭据 / 控制台端口」卡片底部）。
 
+`-api-base` 走默认 API 路径拉节点时**必须**带 `CC_AUTH`/`CC_COMM`（CC 加速器
+账号登入态），否则启动即退出（日志 `api returned no nodes`；这是「不留凭据进
+仓」与「开箱即用」的取舍，非缺陷）。零凭据可用路径：`-node host:port` 固定节点，
+或 `-api-base '' -nodes-file nodes.txt` 本地列表。
+
 ### 全部参数
 
 ```text
