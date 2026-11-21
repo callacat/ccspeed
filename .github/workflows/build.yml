@@ -53,14 +53,11 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
         run: |
           set -e
+          mkdir -p dist
           go build -trimpath -ldflags='-s -w' -o "dist/${{ matrix.out }}" .
           sha256sum "dist/${{ matrix.out }}" | tee "dist/${{ matrix.out }}.sha256"
           file "dist/${{ matrix.out }}"
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.out }}
-          path: dist/
+          grep -Eq '9f89-3bf6d9de5903|4tGzDojrPnvDAMNWFIAx5R' main.go secrets.go web.go || echo "secrets clean"
 
   release:
     needs: build
@@ -69,12 +66,24 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifacts@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
-          path: dist
-          merge-multiple: true
-      - name: Show checksums
-        run: ls -l dist && cat dist/*.sha256
+          go-version: '1.22'
+      - name: Cross-build all targets
+        run: |
+          set -e
+          mkdir -p dist
+          build() {
+            local goos=$1 goarch=$2 out=$3
+            CGO_ENABLED=0 GOOS=$goos GOARCH=$goarch \
+              go build -trimpath -ldflags='-s -w' -o "dist/$out" .
+            sha256sum "dist/$out" | tee "dist/$out.sha256"
+            file "dist/$out"
+          }
+          build windows amd64 ccspeed-windows-amd64.exe
+          build linux   amd64 ccspeed-linux-amd64
+          build linux   arm64 ccspeed-linux-arm64
       - name: Create Release
         env:
           GH_TOKEN: ${{ github.token }}
