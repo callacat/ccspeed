@@ -107,6 +107,7 @@ func main() {
 	if *apiBase != "" && *node == "" {
 		group := *apiGroup
 		groupsUsed := 0
+		var lastErr error
 		if group == 0 && *apiGame == 0 {
 			// 采样多个随机 groupId，汇总节点后再测延迟选最快。
 			seen := map[string]bool{}
@@ -120,7 +121,14 @@ func main() {
 					g += mrand.IntN(*apiGroupMax - *apiGroupMin + 1)
 				}
 				ns, e := fetchAPINodes(*apiBase, *apiAuth, *apiComm, 0, g)
-				if e != nil || len(ns) == 0 {
+				if e != nil {
+					// 拉取失败（含缺凭据 / 上游 401）：=> 记 lastErr 并继续尝试下一组，末尾把 lastErr 冒泡
+					lastErr = e
+					log.Printf("group %d fetch failed: %v", g, e)
+					continue
+				}
+				if len(ns) == 0 {
+					// 拉到 0 条：静默 continue
 					continue
 				}
 				groupsUsed++
@@ -139,7 +147,14 @@ func main() {
 			groupsUsed = 1
 		}
 		if len(nodes) == 0 {
-			log.Fatal("api returned no nodes")
+			// 无论 -quiet 与否，启动失败必须让用户在 stderr 看到真实原因（缺凭据 / 上游 401），
+			// 而不是被 quiet tee 吞掉或退化成误导人的 "api returned no nodes"。
+			msg := "api returned no nodes"
+			if lastErr != nil {
+				msg = lastErr.Error()
+			}
+			fmt.Fprintln(os.Stderr, "ccspeed: "+msg)
+			os.Exit(1)
 		}
 		log.Printf("nodes loaded from API=%d groups=%d", len(nodes), groupsUsed)
 	} else {
@@ -243,6 +258,18 @@ func fetchAPINodes(base, auth, comm string, gameID, groupID int) ([]string, erro
 		var m map[string]any
 		if err := json.NewDecoder(resp.Body).Decode(&m); err != nil {
 			return nil, err
+		}
+		// 上游未登入/凭证失效时返 {"code":401,"msg":"您还没有登入,请先登入"}（HTTP 也常是 200），
+		// 不在这里冒泡就会被 walk 当成「结构里没有节点」，最后以 "api returned no nodes" 误导用户。
+		if c, ok := m["code"]; ok {
+			switch fmt.Sprint(c) {
+			case "401", "403":
+				msg, _ := m["msg"].(string)
+				if msg == "" {
+					msg = "上游拒绝：凭证无效或未登入"
+				}
+				return nil, fmt.Errorf("api %s: %s（检查 CC_AUTH/CC_COMM）", url, msg)
+			}
 		}
 		return m, nil
 	}
