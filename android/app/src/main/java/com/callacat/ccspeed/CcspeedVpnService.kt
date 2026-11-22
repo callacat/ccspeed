@@ -22,15 +22,20 @@ class CcspeedVpnService : VpnService() {
     private var tun: ParcelFileDescriptor? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        Log.i(TAG, "onStartCommand enter action=${intent?.action}")
         if (intent?.action == ACTION_STOP) {
             stopSelf()
             return START_NOT_STICKY
         }
         startForegroundNotify()
+        Log.i(TAG, "startForegroundNotify done")
         // 顺序很关键：先起 ccspeed（监听 1081/28981），再建 TUN 起 tun2socks。
         // 反过来 TUN 建好但 socks5 不在时，hev 的连接会全 fail 且不自愈。
+        Log.i(TAG, "before CcspeedRuntime.start")
         CcspeedRuntime.start(this)
+        Log.i(TAG, "after CcspeedRuntime.start alive=${CcspeedRuntime.running}")
         establishTunAndForward()
+        Log.i(TAG, "after establishTunAndForward")
         return START_STICKY
     }
 
