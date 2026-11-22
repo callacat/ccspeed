@@ -70,56 +70,27 @@ object CcspeedRuntime {
 
     @Synchronized
     fun start(ctx: Context): Boolean {
-        Log.i(TAG, "start:1 alive check")
         if (process?.alive() == true) return true
-        Log.i(TAG, "start:2 killStale")
+        // 清残留：上次强杀后可能仍有同名进程占端口。两套资产名都 pkill，
+        // 因为 ABI 切换（真机→AVD）时上一套名字的进程可能残留。
         killStale()
-        Log.i(TAG, "start:3 nativeBinary")
         val bin = nativeBinary(ctx)
-        Log.i(TAG, "start:4 binary path=${bin.absolutePath}")
-        if (!verifyBinary(bin)) {
-            lastLog = "native binary missing or not executable at ${bin.absolutePath}"
-            Log.e(TAG, lastLog)
-            return false
-        }
-        Log.i(TAG, "start:5 abi/log binary=${bin.absolutePath} canExec=${bin.canExecute()}")
+        if (!verifyBinary(bin)) return false
         val pb = ProcessBuilder(
             bin.absolutePath,
             "-listen", LISTEN,
             "-web", WEB,
         ).apply {
+            // 与壳同 dataDir，ccspeed.json 由 Web 控制台写到这里
             directory(ctx.filesDir)
             redirectErrorStream(true)
             environment()["HOME"] = ctx.filesDir.absolutePath
-        }
-        // runCatching 包裹 start()：任何 exec 失败都会被捕获、记录、上抛给 UI，而不是裸调闪退
-        val started = runCatching { pb.start() }
-            .onFailure { e ->
-                lastLog = "ProcessBuilder.start failed: ${e.message}"
-                Log.e(TAG, lastLog, e)
-            }
-            .getOrNull()
-        if (started == null) return false
-        process = started
-        Thread({ drainLog(started) }, "ccspeed-log").apply { isDaemon = true }.start()
-        lastLog = "started alive=${started.isAlive}"
+        }.start()
+        process = pb
+        Thread({ drainLog(pb) }, "ccspeed-log").apply { isDaemon = true }.start()
+        lastLog = "started alive=${pb.isAlive}"
         Log.i(TAG, lastLog)
         return true
-    }
-
-    /** 读取 core 版本：exec `<bin> -version` 取首行 */
-    fun coreVersion(ctx: Context): String {
-        val bin = nativeBinary(ctx)
-        if (!verifyBinary(bin)) return "unavailable"
-        return try {
-            ProcessBuilder(bin.absolutePath, "-version")
-                .redirectErrorStream(true)
-                .start()
-                .inputStream.bufferedReader().use { it.readLine() ?: "unknown" }
-        } catch (e: Throwable) {
-            Log.e(TAG, "coreVersion failed", e)
-            "error"
-        }
     }
 
     @Synchronized
@@ -127,7 +98,7 @@ object CcspeedRuntime {
         val p = process
         process = null
         runCatching { p?.destroy() }
-        // 双保险防僵尸进程占端口
+        // App 不退出时 destroy 足够；双保险防僵尸进程占端口
         killStale()
         lastLog = "stopped"
         Log.i(TAG, lastLog)
@@ -136,13 +107,11 @@ object CcspeedRuntime {
     val running: Boolean
         get() = process?.alive() == true
 
-    /** pkill 两套资产名，防 ABI 切换后残留进程占端口。用 pgrep 找 PID → 过滤自身 PID → 再 kill，防误杀 FGS 进程。 */
+    /** pkill 两套资产名，防 ABI 切换后残留进程占端口。 */
     private fun killStale() {
-        val myPid = android.os.Process.myPid()
-        for (name in listOf("ccspeed", "libccspeed.so")) {
+        for (name in listOf("libccspeed.so", "ccspeed-linux-arm64", "ccspeed-linux-amd64")) {
             runCatching {
-                val cmd = "pgrep -f $name | grep -v ^$myPid$ | xargs -r kill"
-                ProcessBuilder("sh", "-c", cmd)
+                ProcessBuilder("sh", "-c", "pkill -f $name")
                     .redirectErrorStream(true).start().waitFor()
             }
         }
