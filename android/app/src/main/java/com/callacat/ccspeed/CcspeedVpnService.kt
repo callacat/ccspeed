@@ -67,7 +67,9 @@ class CcspeedVpnService : VpnService() {
         }
         val fd = runCatching { builder.establish() }.getOrNull()
         if (fd == null) {
-            Log.e(TAG, "establish() 返回 null——授权被拒或接口冲突")
+            Log.e(TAG, "establish() 返回 null——授权被拒或接口冲突（如 Tailscale 等其他 VPN 占用）")
+            // 通知 UI 显示冲突提示，而不是静默 stopSelf
+            notifyVpnConflict()
             stopSelf()
             return
         }
@@ -86,6 +88,12 @@ class CcspeedVpnService : VpnService() {
             return
         }
         Log.i(TAG, "hev started config=$yml")
+    }
+
+    /** 发送广播通知 MainActivity：VPN 接口冲突（其他 VPN 占用） */
+    private fun notifyVpnConflict() {
+        val intent = Intent(ACTION_VPN_CONFLICT)
+        sendBroadcast(intent)
     }
 
     /**
@@ -179,6 +187,8 @@ class CcspeedVpnService : VpnService() {
         private const val CHANNEL_ID = "ccspeed_vpn"
         private const val NOTIFICATION_ID = 1001
         private const val ACTION_STOP = "com.callacat.ccspeed.action.STOP"
+        /** 广播 action：VPN 接口被其他应用（如 Tailscale）占用 */
+        const val ACTION_VPN_CONFLICT = "com.callacat.ccspeed.action.VPN_CONFLICT"
 
         fun start(context: android.content.Context) {
             val i = Intent(context, CcspeedVpnService::class.java)

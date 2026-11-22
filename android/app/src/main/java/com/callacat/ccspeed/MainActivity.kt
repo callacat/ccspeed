@@ -1,45 +1,127 @@
 package com.callacat.ccspeed
 
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
-import android.net.Uri
+import android.content.IntentFilter
 import android.net.VpnService
+import android.os.Build
 import android.os.Bundle
-import android.widget.Button
-import android.widget.TextView
-import android.app.Activity
-import android.content.ActivityNotFoundException
 import android.util.Log
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import android.widget.Button
+import android.widget.LinearLayout
+import android.widget.TextView
+import android.widget.Toast
+import java.io.File
 
 /**
- * 三按钮壳。所有业务 UI 都在 Web 控制台；这里只做启停 + 打开控制台。
+ * 三按钮壳。所有业务 UI 都在 Web 控制台；这里只做启停 + 打开控制台 + 版本显示 + 崩溃日志。
  */
 class MainActivity : Activity() {
     private lateinit var status: TextView
+    private lateinit var versionInfo: TextView
+    private lateinit var crashLogView: TextView
+    private lateinit var webView: WebView
     private var wantVpn = false
+    private var vpnConflictReceiver: BroadcastReceiver? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val root = android.widget.LinearLayout(this).apply {
-            orientation = android.widget.LinearLayout.VERTICAL
+
+        // 1. 版本信息：壳版本（BuildConfig）+ 核心版本（exec -version）
+        val shellVersion = BuildConfig.VERSION_NAME
+        val coreVersion = CcspeedRuntime.coreVersion(this)
+        val versionText = "壳 v$shellVersion · 核心 v$coreVersion"
+
+        // 2. 崩溃日志：读取上次崩溃的前两行
+        val crashLog = CcspeedRuntime.crashLogFile
+        val crashText = if (crashLog.exists()) {
+            crashLog.readText().lines().take(2).joinToString("\n")
+        } else "无崩溃记录"
+
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
             setPadding(36, 48, 36, 48)
         }
+
+        versionInfo = TextView(this).apply {
+            text = versionText
+            textSize = 14f
+            setPadding(0, 0, 0, 12)
+        }
+
         status = TextView(this).apply {
             text = "未启动"
             textSize = 16f
             setPadding(0, 0, 0, 24)
         }
+
+        crashLogView = TextView(this).apply {
+            text = "上次崩溃：$crashText"
+            textSize = 12f
+            setTextColor(0xFF666666.toInt())
+            setPadding(0, 0, 0, 24)
+            maxLines = 3
+        }
+
         val toggle = Button(this).apply {
             text = "启动"
             setOnClickListener { if (wantVpn) onStopClicked() else onStartClicked() }
         }
+
         val console = Button(this).apply {
             text = "打开控制台 http://127.0.0.1:28981"
             setOnClickListener { openConsole() }
         }
+
+        // WebView 作为主控制台（不跳外部浏览器）
+        webView = WebView(this).apply {
+            settings.javaScriptEnabled = true
+            settings.domStorageEnabled = true
+            settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+            webViewClient = WebViewClient()
+            visibility = android.view.View.GONE
+        }
+
+        root.addView(versionInfo)
         root.addView(status)
+        root.addView(crashLogView)
         root.addView(toggle)
         root.addView(console)
+        root.addView(webView)
+
         setContentView(root)
+
+        // 注册 VPN 冲突广播接收器
+        vpnConflictReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                if (intent?.action == CcspeedVpnService.ACTION_VPN_CONFLICT) {
+                    runOnUiThread {
+                        status.text = "冲突：其他 VPN（如 Tailscale）占用中，请先关闭"
+                        wantVpn = false
+                        toggle.text = "启动"
+                        Toast.makeText(this@MainActivity, "检测到其他 VPN 占用，请先关闭后重试", Toast.LENGTH_LONG).show()
+                    }
+                }
+            }
+        }
+        registerReceiver(vpnConflictReceiver!!, IntentFilter(CcspeedVpnService.ACTION_VPN_CONFLICT))
+
+        // 设置全局未捕获异常处理器：写 crash.log + UI 展示
+        Thread.setDefaultUncaughtExceptionHandler { _, throwable ->
+            val logFile = CcspeedRuntime.crashLogFile
+            val msg = throwable.message ?: throwable.toString()
+            val stack = throwable.stackTrace.joinToString("\n")
+            logFile.writeText("$msg\n$stack")
+            Log.e("ccspeed-crash", "Uncaught exception: $msg\n$stack")
+        }
+    }
+
+    override fun onDestroy() {
+        vpnConflictReceiver?.let { unregisterReceiver(it) }
+        super.onDestroy()
     }
 
     private fun onStartClicked() {
@@ -66,6 +148,7 @@ class MainActivity : Activity() {
         CcspeedVpnService.stop(this)
         CcspeedRuntime.stop()
         status.text = "已停止"
+        webView.visibility = android.view.View.GONE
         Log.i(TAG, "user stopped")
     }
 
@@ -88,17 +171,9 @@ class MainActivity : Activity() {
     }
 
     private fun openConsole() {
-        val uri = Uri.parse(CcspeedRuntime.WEB_URL)
-        val i = Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        try {
-            startActivity(i)
-        } catch (e: ActivityNotFoundException) {
-            // 真机无浏览器时兜底 WebView 一行页，避免「点了没反应」
-            startActivity(
-                Intent(this, ConsoleActivity::class.java)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-            )
-        }
+        // WebView 优先：直接在应用内打开控制台
+        webView.visibility = android.view.View.VISIBLE
+        webView.loadUrl(CcspeedRuntime.WEB_URL)
     }
 
     override fun onResume() {

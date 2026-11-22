@@ -165,16 +165,17 @@ func apiStatus(w http.ResponseWriter, r *http.Request) {
 	st.mu.RLock()
 	defer st.mu.RUnlock()
 	writeJSON(w, map[string]any{
-		"listen":     listenAddr(),
-		"node":       st.chosen,
-		"node_name":  st.chosenName,
-		"node_group": regionOf(st.chosenName),
-		"latency_ms": st.latency.Milliseconds(),
-		"rotating":   st.rotate,
-		"nodes":      len(st.nodes),
-		"since":      st.chosenTime.UTC().Format(time.RFC3339),
-		"socks_auth": st.socksUser != "",
-		"udp_node":   st.udpNode,
+		"listen":        listenAddr(),
+		"node":          st.chosen,
+		"node_name":     st.chosenName,
+		"node_group":    regionOf(st.chosenName),
+		"latency_ms":    st.latency.Milliseconds(),
+		"rotating":      st.rotate,
+		"nodes":         len(st.nodes),
+		"since":         st.chosenTime.UTC().Format(time.RFC3339),
+		"socks_auth":    st.socksUser != "",
+		"udp_node":      st.udpNode,
+		"core_version":  version,
 	})
 }
 

@@ -10,7 +10,8 @@ android {
         minSdk 23
         targetSdk 34
         versionCode 1
-        versionName '1.0.0'
+        // versionName 由 CI 注入（-PversionName=$GITHUB_REF_NAME），本地构建回退 1.0.0
+        versionName project.hasProperty('versionName') ? versionName : '1.0.0'
         // 关键：二进制走 jniLibs 而非 assets → filesDir exec。Android 10+
         // SELinux 禁止 untrusted_app 执行 app_data_file 上的可执行文件
         //（run 44984072424 见 execute_no_trans denied），但允许 nativeLibraryDir
@@ -25,6 +26,14 @@ android {
     aaptOptions {
         // 不压缩，安装器直接解压到 lib/<abi>/
         noCompress 'libccspeed.so', 'libhev-socks5-tunnel.so'
+    }
+
+    packaging {
+        jniLibs {
+            // 必须显式开启 legacy packaging，否则 AGP 8.x 会拒绝把 libccspeed.so 抽取到 nativeLibraryDir
+            //（报错: "jniLibs.useLegacyPackaging=false but libccspeed.so is not a standard JNI library"）
+            useLegacyPackaging = true
+        }
     }
 
     signingConfigs {

@@ -53,8 +53,13 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
         run: |
           set -e
-          mkdir -p dist
-          go build -trimpath -ldflags='-s -w' -o "dist/${{ matrix.out }}" .
+          mkdir -p ***
+          # 注入版本号：tag 构建用 tag 名，push 构建用 short sha
+          VERSION="${{ github.ref_name }}"
+          if [[ "${{ github.ref }}" != refs/tags/* ]]; then
+            VERSION="dev-${{ github.sha::8 }}"
+          fi
+          go build -trimpath -ldflags="-s -w -X main.version=$VERSION" -o "dist/${{ matrix.out }}" .
           sha256sum "dist/${{ matrix.out }}" | tee "dist/${{ matrix.out }}.sha256"
           file "dist/${{ matrix.out }}"
           grep -Eq '9f89-3bf6d9de5903|4tGzDojrPnvDAMNWFIAx5R' main.go secrets.go web.go || echo "secrets clean"
@@ -89,7 +94,7 @@ jobs:
           echo "jniLibs secrets clean"
       - name: Assemble debug APK
         working-directory: android
-        run: ./gradlew assembleDebug --no-daemon
+        run: ./gradlew assembleDebug --no-daemon -PversionName=${{ github.ref_name }}
       - name: List APK
         working-directory: android
         run: ls -la app/build/outputs/apk/debug/
@@ -120,7 +125,7 @@ jobs:
 
       - name: Assemble debug APK
         working-directory: android
-        run: ./gradlew assembleDebug --no-daemon
+        run: ./gradlew assembleDebug --no-daemon -PversionName=${{ github.ref_name }}
 
       - name: Enable KVM
         run: |
@@ -166,15 +171,20 @@ jobs:
       - uses: gradle/actions/setup-gradle@v3
       - name: Build Android debug APK
         working-directory: android
-        run: ./gradlew assembleDebug --no-daemon
+        run: ./gradlew assembleDebug --no-daemon -PversionName=${{ github.ref_name }}
+      - name: SHA256 APK (release)
+        working-directory: android
+        run: sha256sum app/build/outputs/apk/debug/app-debug.apk
       - name: Cross-build all targets
         run: |
           set -e
-          mkdir -p dist
+          mkdir -p ***
+          # 注入版本号（tag 构建）
+          VERSION="${{ github.ref_name }}"
           build() {
             local goos=$1 goarch=$2 out=$3
             CGO_ENABLED=0 GOOS=$goos GOARCH=$goarch \
-              go build -trimpath -ldflags='-s -w' -o "dist/$out" .
+              go build -trimpath -ldflags="-s -w -X main.version=$VERSION" -o "dist/$out" .
             sha256sum "dist/$out" | tee "dist/$out.sha256"
             file "dist/$out"
           }
@@ -188,7 +198,7 @@ jobs:
           set -e
           gh release create "${{ github.ref_name }}" \
             --title "ccspeed ${{ github.ref_name }}" \
-            --notes "$(printf 'ccspeed %s\n\n- Web 控制台 + 内嵌 UI（凭据 / 选节点 / 日志 / SOCKS5 鉴权）\n- 纯 Go stdlib，零第三方依赖；CGO_ENABLED=0 静态构建\n- Android 薄壳 APK（Kotlin + VpnService + 内嵌 ccspeed-linux-arm64 + hev-socks5-tunnel）\n- 二进制未经代码签名，Windows SmartScreen 首次会拦（见 README §6）\n' "${{ github.ref_name }}")" \
+            --notes "$(printf 'ccspeed %s\n\n- Web 控制台 + 内嵌 UI（凭据 / 选节点 / 日志 / SOCKS5 鉴权）\n- 纯 Go stdlib，零第三方依赖；CGO_ENABLED=0 静态构建\n- Android 薄壳 APK（Kotlin + VpnService + 内嵌 ccspeed-linux-arm64 + hev-socks5-tunnel）\n- 二进制未经代签名，Windows SmartScreen 首次会拦（见 README §6）\n' "${{ github.ref_name }}")" \
             dist/ccspeed-windows-amd64.exe \
             dist/ccspeed-windows-amd64.exe.sha256 \
             dist/ccspeed-linux-amd64 \

@@ -29,6 +29,9 @@ import (
 
 const xorKey = 0x41
 
+// version 由构建时通过 -ldflags "-X main.version=..." 注入（CI release job 自动注入 tag）
+var version = "dev"
+
 // state 保存运行时可变状态；切节点/改凭据只换指针，老连接继续用旧值。
 type state struct {
 	mu         sync.RWMutex
@@ -84,7 +87,13 @@ func main() {
 	quiet := flag.Bool("quiet", true, "hide logs (set -quiet=false to show)")
 	apiAuth := flag.String("api-auth", envOr(os.Getenv("CC_AUTH"), defaultAPIAuth), "Authorization header (or CC_AUTH)")
 	apiComm := flag.String("api-comm", envOr(os.Getenv("CC_COMM"), defaultAPIComm), "comm header (or CC_COMM)")
+	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println(version)
+		return
+	}
 	log.SetOutput(newTee(io.Discard, ringBuf))
 	// 控制台可见：日志同时进 ring buffer（Web /api/logs 用），quiet 只影响 stdout。
 	if !*quiet {

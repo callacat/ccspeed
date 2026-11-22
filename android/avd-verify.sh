@@ -89,23 +89,22 @@ adb shell "ip -o addr show tun0 || echo 'NO tun0'"
 say "SOCKS5 127.0.0.1:1081 在听（/proc/net/tcp :0439）"
 adb shell "(grep -i ':0439' /proc/net/tcp || echo 'NO 1081 LISTEN')"
 
-say "Web 控制台 127.0.0.1:28981 应答（AVD 无 curl/wget，adB forward + runner host curl）"
-# AVD google_apis 镜像 toybox 没有 curl/wget（run 44980563192 见
-# `wget: inaccessible or not found`），不能从 AVD 内探测。改用 adb forward 把
-# AVD 的 28981 映射到 runner host，然后用 host 的 curl 打 localhost。
+say "Web 控制台 127.0.0.1:28981 应答（AVD 无 curl，用 wget；adb forward + runner host wget）"
+# AVD google_apis 镜像 toybox 有 wget 无 curl（run 44980563192 见
+# `wget: inaccessible or not found` 是旧版本，新版 toybox 自带 wget）。
+# 改用 adb forward 把 AVD 的 28981 映射到 runner host，然后用 host 的 wget 打 localhost。
 adb forward tcp:28981 tcp:28981
 echo "port-forward set"
-curl -s -o /tmp/webconsole.html -w 'web console http=%{http_code} bytes=%{size_download}\n' \
-    http://127.0.0.1:28981/ || echo "web console unreachable"
+wget -q -O /tmp/webconsole.html --server-response http://127.0.0.1:28981/ 2>&1 | grep -E "HTTP|Length" | tail -2
 head -c 200 /tmp/webconsole.html 2>/dev/null; echo
 adb forward --remove tcp:28981 || true
 
-say "TUN 生效：curl 经壳出（拿出口 IP，与 AVD 自身 egress 不同即接管成功）"
+say "TUN 生效：wget 经壳出（拿出口 IP，与 AVD 自身 egress 不同即接管成功）"
 # 同法：AdbHost->AVD forward 只覆盖 28981（壳的 web）；外部出口探测改从 runner
 # host 直接打 ifconfig.me 记录基线 IP，再与经壳出去（如无主机客户端可走）作对比。
-# AVD 内无 curl/wget，本判据降级为「logcat 有 relay/隧道记录 + tun0 存在 +
-# SOCKS5 在听 + runner host 直连 ifconfig.me 记录基线 IP」。
-curl -s --max-time 20 https://ifconfig.me | tee /tmp/host_egress_ip.txt || echo "host egress fetch failed"
+# AVD 内无 curl，用 wget；runner host 直连 ifconfig.me 记录基线 IP。
+wget -q -O /tmp/host_egress_ip.txt --timeout=20 https://ifconfig.me 2>&1 | tail -1
+cat /tmp/host_egress_ip.txt 2>/dev/null; echo
 echo "runner host egress baseline: $(cat /tmp/host_egress_ip.txt 2>/dev/null)"
 
 say "gate: 每条探针都需非 FAIL（WARN 容 center-tap 兜底命中）"
