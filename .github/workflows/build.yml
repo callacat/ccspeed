@@ -72,16 +72,21 @@ jobs:
       - name: Verify embedded binaries (sha256 对拍)
         run: |
           set -e
-          # assets 里的 ccspeed 必须与 v1.0.1 Release 一致；jniLibs 里的 hev 必须与本 run 一致。
-          sha256sum android/app/src/main/assets/ccspeed-linux-arm64
-          sha256sum android/app/src/main/jniLibs/arm64-v8a/libhev-socks5-tunnel.so
+          # jniLibs 里的 ccspeed 是 APK installer 会解压到 nativeLibraryDir 的 ELF（selinux 只允许在该处 exec）；hev 是 ATM JNI 库。
+          for f in \
+            android/app/src/main/jniLibs/arm64-v8a/libccspeed.so \
+            android/app/src/main/jniLibs/x86_64/libccspeed.so \
+            android/app/src/main/jniLibs/arm64-v8a/libhev-socks5-tunnel.so \
+            android/app/src/main/jniLibs/x86_64/libhev-socks5-tunnel.so; do
+            sha256sum "$f"
+          done
           # APK 不带凭据：Release 产物默认 credentials 为空（main.go 的 defaultAPIAuth 空串），
           # 这里只把显式写进二进制显然易见的形状掐掉。
           if grep -aoE 'CC_AUTH=[A-Za-z0-9_-]{16,}|CC_COMM=[A-Za-z0-9_-]{16,}' \
-               android/app/src/main/assets/ccspeed-linux-arm64; then
-            echo "FATAL: assets 命中凭据形状"; exit 1
+               android/app/src/main/jniLibs/*/libccspeed.so; then
+            echo "FATAL: jniLibs 命中凭据形状"; exit 1
           fi
-          echo "assets secrets clean"
+          echo "jniLibs secrets clean"
       - name: Assemble debug APK
         working-directory: android
         run: ./gradlew assembleDebug --no-daemon
@@ -97,9 +102,9 @@ jobs:
         run: sha256sum app/build/outputs/apk/debug/app-debug.apk
 
   # 真机 192.168.1.157 暂不可达 ⇒ 装机验收降级到 CI 内 AVD。
-  # GitHub ubuntu runner 自带 KVM 硬件加速；API 34 + x86_64 镜像恰好能
-  # exec GOOS=linux GOARCH=amd64 的 ccspeed（AVD 无 ARM 转译层；amba64 壳里
-  # 只放 arm64 ELF 会 exec format error）。真机回归项单列在 README。
+  # GitHub ubuntu runner 自带 KVM 硬件加速；API 34 / x86_64 google_apis 镜像
+  # 上 installer 抽取 jniLibs/x86_64/libccspeed.so 到 nativeLibraryDir，SELinux
+  # 允许 untrusted_app 在 nativeLibraryDir 直接 exec。真机回归项单列在 README。
   android-emulator:
     needs: [vet]
     runs-on: ubuntu-latest
