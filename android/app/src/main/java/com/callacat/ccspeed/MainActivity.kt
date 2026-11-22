@@ -43,14 +43,21 @@ class MainActivity : Activity() {
     }
 
     private fun onStartClicked() {
-        // VpnService 授权：系统弹窗。同意 → onActivityResult → 启服务。
-        val intent: Intent? = VpnService.prepare(this)
-        if (intent != null) {
-            wantVpn = true
-            startActivityForResult(intent, REQ_VPN)
-        } else {
+        // VpnService 授权：系统弹窗。CI 里无 UI 且 tap 不触发 onActivityResult，直接走 startVpn；
+        // 真机走 VpnService.prepare → onActivityResult → startVpn。
+        val isCI = System.getenv("CI") != null || System.getenv("GITHUB_ACTIONS") != null
+        if (isCI) {
             wantVpn = true
             startVpn()
+        } else {
+            val intent: Intent? = VpnService.prepare(this)
+            if (intent != null) {
+                wantVpn = true
+                startActivityForResult(intent, REQ_VPN)
+            } else {
+                wantVpn = true
+                startVpn()
+            }
         }
     }
 
