@@ -11,17 +11,20 @@ android {
         targetSdk 34
         versionCode 1
         versionName '1.0.0'
+        // 关键：二进制走 jniLibs 而非 assets → filesDir exec。Android 10+
+        // SELinux 禁止 untrusted_app 执行 app_data_file 上的可执行文件
+        //（run 44984072424 见 execute_no_trans denied），但允许 nativeLibraryDir
+        // 下直接 exec（v2rayNG/Xray 同款姿势）。两套 ABI：
+        // arm64-v8a（真机）+ x86_64（AVD），文件名都以 lib 打头写成 libccspeed.so，
+        // 否则 installer 不抽取到 nativeLibraryDir。
+        ndk {
+            abiFilters 'arm64-v8a', 'x86_64'
+        }
     }
 
-    // 关键：把内嵌 ELF 放进 jniLibs 而非 assets。Android 10+ SELinux 禁止 untrusted_app 执行
-    // app_data_file 上的文件，但允许 nativeLibraryDir（/data/app/.../lib/<abi>/）下执行。
-    // 两套 ABI：arm64-v8a（真机）+ x86_64（AVD），名字统一为 ccspeed（无后缀），
-    // 运行时按 Build.SUPPORTED_ABIS 从 nativeLibraryDir 取对应目录下的 ccspeed。
-    ndk {
-        abiFilters 'arm64-v8a', 'x86_64'
-    }
     aaptOptions {
-        noCompress 'ccspeed'  // 不压缩，安装器直接解压到 lib/<abi>/
+        // 不压缩，安装器直接解压到 lib/<abi>/
+        noCompress 'libccspeed.so', 'libhev-socks5-tunnel.so'
     }
 
     signingConfigs {
@@ -48,12 +51,6 @@ android {
 
     kotlinOptions {
         jvmTarget = '17'
-    }
-
-    // assets 里躺两个未压缩 ELF（~5.5MB arm64 + ~6.8MB amd64），默认压缩会让解压读盘变慢；
-    // 只是解压不走 zip 解压器，跳过压缩省一次 IO。
-    androidResources {
-        noCompress 'ccspeed-linux-arm64', 'ccspeed-linux-amd64'
     }
 }
 
