@@ -94,13 +94,17 @@ class MainActivity : Activity() {
         }
     }
 
-    @Override
-    protected void onResume() {
+    override fun onResume() {
         super.onResume()
-        // AVD 无 UI + tap 授权链回来后 onActivityResult 偶发不被调；用 wantVpn 兜底
+        // AVD 无 UI + tap 授权对话框返回时 onActivityResult 偶发不被调；用 wantVpn 兜底
         if (wantVpn) {
             startVpn()
             wantVpn = false
         }
+    }
+
+    companion object {
+        private const val TAG = "ccspeed-main"
+        private const val REQ_VPN = 1001
     }
 }
