@@ -4,33 +4,19 @@ import android.content.Context
 import android.os.Build
 import android.util.Log
 import java.io.File
-import java.io.FileOutputStream
 
 /**
- * ccspeed native 进程管理：把 assets 里对应 ABI 的 ccspeed 二进制解压到
- * app-internal 目录、chmod +x、拉起/杀掉。凭据/节点全部由 Web 控制台
- * 写 ccspeed.json，壳不看不存。
+ * ccspeed native 进程管理。二进制不走 assets → filesDir 解压 exec：Android 10+
+ * SELinux 禁止 untrusted_app 执行 app_data_file 上的可执行文件（run 44984072424
+ * 见 `avc: denied { execute_no_trans } path=/data/data/.../ccspeed-bin/
+ * ccspeed-linux-arm64`，exec 抛 error=13 Permission denied）。
  *
- * 常驻 Go 源码构建（GOOS=linux，CGO_ENABLED=0 静态 ELF），不是 android tag：
- * Termux/v2rayNG 生态实证静态 linux ELF 可在 Android 直接 exec，
- * android tag 只服务 gomobile c-shared。
+ * 改走 jniLibs/<abi>/ccspeed：APK installer 把它解压到 nativeLibraryDir
+ * （/data/app/.../lib/<abi>/），该目录是 SELinux 允许 untrusted_app exec 的
+ * native_library 区，v2rayNG / Termux 同款姿势。壳只做按 ABI 挑目录 + exec。
  */
 object CcspeedRuntime {
     private const val TAG = "ccspeed-runtime"
-
-    private val ASSET_BIN: String by lazy {
-        // AVD x86_64 的 SUPPORTED_ABIS 是 [x86_64, x86]（无 arm64-v8a）；
-        // 真机 arm64 相反。两套都命中同包名 ccspeed-linux-<abi>。
-        val abis = Build.SUPPORTED_ABIS ?: emptyArray()
-        when {
-            abis.contains("arm64-v8a") -> "ccspeed-linux-arm64"
-            abis.contains("x86_64") -> "ccspeed-linux-amd64"
-            else -> {
-                Log.w(TAG, "no known ABI in ${abis.toList()}, fallback arm64")
-                "ccspeed-linux-arm64"
-            }
-        }
-    }
 
     const val LISTEN = "127.0.0.1:1081"
     const val WEB = "127.0.0.1:28981"
@@ -43,28 +29,33 @@ object CcspeedRuntime {
     var lastLog: String = ""
         private set
 
-    private fun binaryFile(ctx: Context): File = File(ctx.applicationInfo.dataDir, "ccspeed-bin").apply { mkdirs() }.let {
-        File(it, ASSET_BIN)
+    private fun binaryFile(ctx: Context): File = nativeSource(ctx) ?: File(ctx.applicationInfo.dataDir, "ccspeed-bin/ccspeed").also { it.parentFile?.mkdirs() }
+
+    /**
+     * 直接从 nativeLibraryDir 取 ccspeed ELF：APK installer 解压 jniLibs/
+     * 到 /data/app/.../lib/<abi>/libccspeed.so，该目录 SELinux 标签允许
+     * untrusted_app exec（run 44984072424 staged 到 dataDir/ccspeed-bin 报
+     * execute_no_trans denied，SELinux 拦 dataDir 放行 nativeLibraryDir）。
+     * 命名必须 lib*.so 否则 installer 不抽（v2rayNG/Xray 同款姿势）。
+     */
+    private fun nativeSource(ctx: Context): File? {
+        val abis = Build.SUPPORTED_ABIS ?: emptyArray()
+        val libDir = ctx.applicationInfo.nativeLibraryDir ?: return null
+        val path = "$libDir/libccspeed.so"
+        val f = File(path)
+        if (!f.exists() || !f.canExecute()) {
+            Log.w(TAG, "native source unavailable: $path exists=${f.exists()} exec=${f.canExecute()} abis=${abis.toList()} libDir=$libDir")
+            return null
+        }
+        return f
     }
 
-    /** 幂等解压：assets 的 sha256 与已落盘不同才覆盖（升级装机时使用）。 */
+    /** 幂等：若 nativeSource 可直接 exec 就直接返回，不再 copy。 */
     @Synchronized
-    fun ensureBinary(ctx: Context): File {
-        val out = binaryFile(ctx)
-        val tmp = File(out.parentFile, "$ASSET_BIN.tmp")
-        ctx.assets.open(ASSET_BIN).use { input ->
-            FileOutputStream(tmp).use { output -> input.copyTo(output, 256 * 1024) }
-        }
-        if (!out.exists() || tmp.length() != out.length()) {
-            tmp.renameTo(out)
-        } else {
-            tmp.delete()
-        }
-        if (!out.canExecute()) {
-            out.setExecutable(true, true)
-        }
-        Log.i(TAG, "binary ready path=${out.absolutePath} size=${out.length()}")
-        return out
+    fun ensureBinary(ctx: Context): File? {
+        val src = nativeSource(ctx) ?: return null
+        Log.i(TAG, "binary ready path=${src.absolutePath}")
+        return src
     }
 
     @Synchronized
@@ -74,7 +65,12 @@ object CcspeedRuntime {
         // 因为 ABI 切换（真机→AVD）时上一套名字的进程可能残留。
         killStale()
         val bin = ensureBinary(ctx)
-        Log.i(TAG, "abi=${Build.SUPPORTED_ABIS.toList()} binary=$ASSET_BIN")
+        if (bin == null) {
+            lastLog = "no native source (nativeLibraryDir 缺 ccspeed ELF)"
+            Log.e(TAG, lastLog)
+            return false
+        }
+        Log.i(TAG, "abi=${Build.SUPPORTED_ABIS.toList()} binary=${bin.absolutePath}")
         val pb = ProcessBuilder(
             bin.absolutePath,
             "-listen", LISTEN,
@@ -108,7 +104,7 @@ object CcspeedRuntime {
 
     /** pkill 两套资产名，防 ABI 切换后残留进程占端口。 */
     private fun killStale() {
-        for (name in listOf("ccspeed-linux-arm64", "ccspeed-linux-amd64")) {
+        for (name in listOf("ccspeed", "ccspeed-linux-arm64", "ccspeed-linux-amd64")) {
             runCatching {
                 ProcessBuilder("sh", "-c", "pkill -f $name")
                     .redirectErrorStream(true).start().waitFor()
