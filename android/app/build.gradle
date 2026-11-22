@@ -1,0 +1,51 @@
+apply plugin: 'com.android.application'
+apply plugin: 'kotlin-android'
+
+android {
+    namespace 'com.callacat.ccspeed'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'com.callacat.ccspeed'
+        minSdk 23
+        targetSdk 34
+        versionCode 1
+        versionName '1.0.0'
+    }
+
+    signingConfigs {
+        debug {
+            // CI 里用环境变量里的 debug keystore（不存在时用 AGP 自动生成的 ~/.android）
+        }
+    }
+
+    buildTypes {
+        debug {
+            minifyEnabled false
+            shrinkResources false
+        }
+        release {
+            minifyEnabled false
+            shrinkResources false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = '17'
+    }
+
+    // assets 里躺着 5.5MB 的 ccspeed-linux-arm64，默认压缩会让解压读盘变慢；
+    // 只是解压不走 zip 解压器，跳过压缩省一次 IO。
+    androidResources {
+        noCompress 'ccspeed-linux-arm64'
+    }
+}
+
+dependencies {
+    implementation "org.jetbrains.kotlin:kotlin-stdlib:1.9.24"
+}

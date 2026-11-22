@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">CC 加速器</string>
+    <string name="vpn_notification_channel">ccspeed_vpn</string>
+    <string name="vpn_notification_title">CC 加速器运行中</string>
+    <string name="vpn_notification_text">SOCKS5 127.0.0.1:1081 · Web 控制台 127.0.0.1:28981</string>
+</resources>
