@@ -1,18 +1,37 @@
 package com.callacat.ccspeed
 
 import android.content.Context
+import android.os.Build
 import android.util.Log
 import java.io.File
 import java.io.FileOutputStream
 
 /**
- * ccspeed native 进程管理：把 assets 里的 ccspeed-linux-arm64 解压到
+ * ccspeed native 进程管理：把 assets 里对应 ABI 的 ccspeed 二进制解压到
  * app-internal 目录、chmod +x、拉起/杀掉。凭据/节点全部由 Web 控制台
  * 写 ccspeed.json，壳不看不存。
+ *
+ * 常驻 Go 源码构建（GOOS=linux，CGO_ENABLED=0 静态 ELF），不是 android tag：
+ * Termux/v2rayNG 生态实证静态 linux ELF 可在 Android 直接 exec，
+ * android tag 只服务 gomobile c-shared。
  */
 object CcspeedRuntime {
     private const val TAG = "ccspeed-runtime"
-    const val ASSET_BIN = "ccspeed-linux-arm64"
+
+    private val ASSET_BIN: String by lazy {
+        // AVD x86_64 的 SUPPORTED_ABIS 是 [x86_64, x86]（无 arm64-v8a）；
+        // 真机 arm64 相反。两套都命中同包名 ccspeed-linux-<abi>。
+        val abis = Build.SUPPORTED_ABIS ?: emptyArray()
+        when {
+            abis.contains("arm64-v8a") -> "ccspeed-linux-arm64"
+            abis.contains("x86_64") -> "ccspeed-linux-amd64"
+            else -> {
+                Log.w(TAG, "no known ABI in ${abis.toList()}, fallback arm64")
+                "ccspeed-linux-arm64"
+            }
+        }
+    }
+
     const val LISTEN = "127.0.0.1:1081"
     const val WEB = "127.0.0.1:28981"
     const val WEB_URL = "http://$WEB/"
@@ -51,11 +70,11 @@ object CcspeedRuntime {
     @Synchronized
     fun start(ctx: Context): Boolean {
         if (process?.alive() == true) return true
-        // 清残留：上次强杀后可能仍有同名进程占端口（pkill 幂等）
-        runCatching {
-            ProcessBuilder("sh", "-c", "pkill -f $ASSET_BIN").redirectErrorStream(true).start().waitFor()
-        }
+        // 清残留：上次强杀后可能仍有同名进程占端口。两套资产名都 pkill，
+        // 因为 ABI 切换（真机→AVD）时上一套名字的进程可能残留。
+        killStale()
         val bin = ensureBinary(ctx)
+        Log.i(TAG, "abi=${Build.SUPPORTED_ABIS.toList()} binary=$ASSET_BIN")
         val pb = ProcessBuilder(
             bin.absolutePath,
             "-listen", LISTEN,
@@ -79,15 +98,23 @@ object CcspeedRuntime {
         process = null
         runCatching { p?.destroy() }
         // App 不退出时 destroy 足够；双保险防僵尸进程占端口
-        runCatching {
-            ProcessBuilder("sh", "-c", "pkill -f $ASSET_BIN").redirectErrorStream(true).start().waitFor()
-        }
+        killStale()
         lastLog = "stopped"
         Log.i(TAG, lastLog)
     }
 
     val running: Boolean
         get() = process?.alive() == true
+
+    /** pkill 两套资产名，防 ABI 切换后残留进程占端口。 */
+    private fun killStale() {
+        for (name in listOf("ccspeed-linux-arm64", "ccspeed-linux-amd64")) {
+            runCatching {
+                ProcessBuilder("sh", "-c", "pkill -f $name")
+                    .redirectErrorStream(true).start().waitFor()
+            }
+        }
+    }
 
     private fun Process.alive(): Boolean =
         try { isAlive } catch (_: Throwable) { false }

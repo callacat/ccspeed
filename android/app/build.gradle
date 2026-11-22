@@ -39,10 +39,10 @@ android {
         jvmTarget = '17'
     }
 
-    // assets 里躺着 5.5MB 的 ccspeed-linux-arm64，默认压缩会让解压读盘变慢；
+    // assets 里躺着两个未压缩 ELF（~5.5MB arm64 + ~6.8MB amd64），默认压缩会让解压读盘变慢；
     // 只是解压不走 zip 解压器，跳过压缩省一次 IO。
     androidResources {
-        noCompress 'ccspeed-linux-arm64'
+        noCompress 'ccspeed-linux-arm64', 'ccspeed-linux-amd64'
     }
 }
 

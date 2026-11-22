@@ -105,6 +105,109 @@ curl --socks5-hostname user:pass@127.0.0.1:1081 https://example.com/
 
 SOCKS5 UDP ASSOCIATE 与 TCP CONNECT 都支持；UDP 走内置 UDP 网关。
 
+## 5b. Android 薄壳 APK（`android/`）
+
+装上即一个「本地 CC 加速器」：APK 只做**启停 + VpnService 流量接管 +
+打开 Web 控制台**，真正的节点客户端是 APK 内嵌的 `ccspeed-linux-arm64`
+（真机）或 `ccspeed-linux-amd64`（模拟器 / x86_64 设备），与 Release 的
+`ccspeed-v1.0.1` 同一产物，sha256 见 CI 的
+`Verify embedded binaries` 步骤。凭据填写、节点选择、日志、切换
+SOCKS5 端口——**全在 Web 控制台完成，Kotlin 壳不复制任何业务 UI**。
+
+### 用法
+
+1. **安装**：CI 的 `android` job 产出 `app-debug.apk`（Release 附件）。
+   `adb install app-debug.apk`
+2. **授权**：点「启动」，系统弹 VpnService 授权对话框，同意。
+3. **接管**：壳建 TUN 并拉起 tun2socks（[hev-socks5-tunnel](https://github.com/heiher/hev-socks5-tunnel)
+   2.20.0 的 `libhev-socks5-tunnel.so`，arm64 + x86_64 两套 JNI），把全流量转发到
+   `127.0.0.1:1081` 的 SOCKS5。TCP 走 CONNECT，DNS 与 UDP 走
+   UDP ASSOCIATE（`udp.go` 实测支持）。
+4. **填凭据**：点「打开控制台」，手机浏览器开
+   `http://127.0.0.1:28981/`，在表单里填 CC API 凭据
+   （写 `ccspeed.json` 到 app-internal，权限 600）。
+   没有独立浏览器时壳内兜底 WebView 打开控制台。
+5. **停止**：点「停止」或下拉通知栏「停止」。VpnService 关闭、native
+   进程退出、端口释放。
+
+### 内嵌二进制与 ABI 选择
+
+assets 里带**两套**未压缩 ELF，`CcspeedRuntime` 启动时按
+`Build.SUPPORTED_ABIS` 解压对应的一份执行：
+
+| 设备/模拟器 ABI | 选用二进制 | 备注 |
+|---|---|---|
+| `arm64-v8a` | `ccspeed-linux-arm64` | 真机（含 Termux 生态同款形态） |
+| `x86_64` | `ccspeed-linux-amd64` | CI AVD 与 x86_64 Android 设备 |
+| 其他 | 回落 `ccspeed-linux-arm64` | 会 `exec format error`，壳不兜底 |
+
+用的是 `GOOS=linux` 静态 ELF 而不是 `GOOS=android` tag：Termux / v2rayNG /
+Xray for Android 生态实证静态 linux ELF 能在 Android 直接 exec，
+`android` tag 只服务 gomobile c-shared，这边不需要。assets 必须先解压到
+`context.filesDir` 再 `chmod 700` + `ProcessBuilder` exec（同 v2rayNG 姿势），
+SELinux 无需 root。
+
+`libhev-socks5-tunnel.so` 同样按 JNI 库规则进 `jniLibs/<abi>/`：上游
+`hev-socks5-tunnel.aar` 四 ABI（arm64-v8a / armeabi-v7a / x86 / x86_64）
+用同一套 `RegisterNatives` 路径注册 `hev/htproxy/TProxyService`，所以 x86_64
+上同一个 Kotlin JNI 声明直接可用，无需为 AVD 另写一层。
+
+### 架构
+
+```text
+apps ──> TUN (VpnService) ──> hev-socks5-tunnel (libhev-socks5-tunnel.so)
+                                   │
+                                   ▼
+                          127.0.0.1:1081 (SOCKS5)
+                                   │
+                                   ▼
+                    ccspeed-linux-<abi> (assets 解压执行)
+                                   │
+                                   ▼
+                              CC 节点 + Web 控制台 127.0.0.1:28981
+```
+
+### 验收：CI 内 Android 模拟器（真机暂不可达）
+
+真机 `192.168.1.157` 暂不可达，装机验收降级到 **CI 内 AVD**：
+`.github/workflows/build.yml` 的 `android-emulator` job 跑
+`reactivecircus/android-emulator-runner`，AVD = API 34 / x86_64 / google_apis
+（GitHub ubuntu runner 自带 KVM 硬件加速），链路：
+
+```text
+gradle assembleDebug → boot AVD → adb install → 启动
+  → uiautomator dump + input tap 触发 VpnService 授权链
+  → adb logcat 抓壳的 ABI banner 与 ccspeed 的 web console banner
+  → 验 SOCKS5 127.0.0.1:1081、控制台 127.0.0.1:28981、tun0 接管
+  → curl 经壳出拿出口 IP → 停止 → 进程/tun 释放 → APK 零凭据复核
+```
+
+资产验收判据同步在 CI 里收口：assets 按 ABI 选对（AVD 上跑 amd64）、
+amd64 target 单独进 Release、CC_AUTH/CC_COMM 凭据形状 zero-hit。
+
+**真机回归项（收口后 backlog 单列）**：NAT 类型、长时保活、真 4G/5G 网络
+下的 CC API——模拟器只能证明「壳 + 转译链 + 控制台 + TUN 接管」三件事成立，
+不代表真机三项 PASS。
+
+### 本地构建
+
+```bash
+cd android
+./gradlew assembleDebug
+# 产物：app/build/outputs/apk/debug/app-debug.apk
+```
+
+要求 JDK 17、Android SDK 34（CI 用
+`actions/setup-java` + `gradle/actions/setup-gradle`）。
+
+### 安全边界
+
+- APK **不打包任何 CC 凭据**；assets 的 `ccspeed-linux-arm64` 与
+  v1.0.1 Release sha256 一致，`ccspeed-linux-amd64` 由 CI 从同 commit
+  交叉编译（`go build -trimpath -ldflags='-s -w'`），CI 每次都核对
+  （`grep -aoE 'CC_AUTH=…'` zero-hit）。
+- SOCKS5 只监听 `127.0.0.1`，Web 控制台只监听 `127.0.0.1`，壳不开对外端口。
+
 ## 6. Windows 未签名提示
 
 CI 产出的二进制**没有代码签名证书**。首次运行 Windows 10/11 SmartScreen
