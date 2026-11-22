@@ -88,12 +88,13 @@ jobs:
       - name: List APK
         working-directory: android
         run: ls -la app/build/outputs/apk/debug/
-      - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ccspeed-android-debug
-          path: android/app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
+      # upload-artifact 走不通：账号 artifact 存储配额打满（10-13 起就这状态，
+      # usage recalculated every 6-12 hours 都不够）。APK 交付改走 release job
+      # 的 gh release create（Release 附件与 artifact 是两套配额），push-only run
+      # 里只保留「构建 + 列产物」当证据，CI 绿不再卡在 upload 动作上。
+      - name: SHA256 APK
+        working-directory: android
+        run: sha256sum app/build/outputs/apk/debug/app-debug.apk
 
   release:
     needs: [build, android]
