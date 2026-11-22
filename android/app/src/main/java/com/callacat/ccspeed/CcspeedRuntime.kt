@@ -29,48 +29,40 @@ object CcspeedRuntime {
     var lastLog: String = ""
         private set
 
-    private fun binaryFile(ctx: Context): File = File(ctx.filesDir, "ccspeed-bin/libccspeed.so").also { it.parentFile?.mkdirs() }
+    private fun binaryFile(ctx: Context): File = File(ctx.filesDir, "ccspeed-bin").apply { mkdirs() }.let {
+        File(it, "ccspeed")
+    }
 
     /**
-     * 直接从 nativeLibraryDir 取 ccspeed ELF：APK installer 解压 jniLibs/
-     * 到 /data/app/.../lib/<abi>/libccspeed.so，该目录 SELinux 标签允许
-     * untrusted_app exec（run 44984072424 staged 到 dataDir/ccspeed-bin 报
-     * execute_no_trans denied，SELinux 拦 dataDir 放行 nativeLibraryDir）。
-     * 命名必须 lib*.so 否则 installer 不抽（v2rayNG/Xray 同款姿势）。
-     *
-     * 关键：installer 解压 .so 时默认 644 无执行位，必须显式 setExecutable。
-     * 若 nativeLibraryDir 只读无法加位，则回退 copy 到 filesDir/ccspeed-bin/ 再 exec。
+     * 从 assets 读取 ccspeed ELF → 写入 filesDir/ccspeed-bin/ccspeed → setExecutable → exec。
+     * Android 10+ SELinux 允许 untrusted_app 在自有 filesDir 上 exec（Termux/v2rayNG 同款姿势）。
+     * 不走 nativeLibraryDir：AGP 8.x 不把自定义命名的 libccspeed.so 当 native library 抽取；
+     * assets 方案是 Termux/v2rayNG 标准姿势，SELinux 允许 app_data_file exec。
      */
     private fun nativeSource(ctx: Context): File? {
-        val libDir = ctx.applicationInfo.nativeLibraryDir ?: return null
-        val src = File(libDir, "libccspeed.so")
-        if (!src.exists()) {
-            Log.w(TAG, "native source not found: ${src.absolutePath}")
-            return null
+        val abis = Build.SUPPORTED_ABIS ?: emptyArray()
+        val assetName = when {
+            abis.contains("arm64-v8a") -> "ccspeed-linux-arm64"
+            abis.contains("x86_64") -> "ccspeed-linux-x86_64"
+            else -> {
+                Log.w(TAG, "no known ABI in ${abis.toList()}, fallback arm64")
+                "ccspeed-linux-arm64"
+            }
         }
-        // 尝试加执行位（nativeLibraryDir 通常只读，setExecutable 可能失败/静默忽略）
-        if (!src.canExecute()) {
-            try { src.setExecutable(true, false) } catch (_: Throwable) { }
-        }
-        if (src.canExecute()) {
-            Log.i(TAG, "native source executable at nativeLibraryDir: ${src.absolutePath}")
-            return src
-        }
-        // 回退：copy 到 filesDir/ccspeed-bin/ 再 exec（Termux/v2rayNG 同款姿势）
         val dst = binaryFile(ctx)
         try {
-            src.inputStream().use { input ->
+            ctx.assets.open(assetName).use { input ->
                 dst.outputStream().use { output -> input.copyTo(output, 256 * 1024) }
             }
             dst.setExecutable(true, false)
             if (dst.canExecute()) {
-                Log.i(TAG, "native source copied to filesDir executable: ${dst.absolutePath}")
+                Log.i(TAG, "native source copied from assets/$assetName executable: ${dst.absolutePath}")
                 return dst
             }
         } catch (e: Throwable) {
-            Log.e(TAG, "copy to filesDir failed", e)
+            Log.e(TAG, "copy from assets failed", e)
         }
-        Log.e(TAG, "native source not executable anywhere: src=${src.absolutePath} canExec=${src.canExecute()} dst=${dst.absolutePath} canExec=${dst.canExecute()}")
+        Log.e(TAG, "native source copy failed: asset=$assetName dst=${dst.absolutePath} canExec=${dst.canExecute()}")
         return null
     }
 
