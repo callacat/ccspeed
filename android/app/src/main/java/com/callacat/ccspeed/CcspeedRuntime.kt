@@ -29,7 +29,7 @@ object CcspeedRuntime {
     var lastLog: String = ""
         private set
 
-    private fun binaryFile(ctx: Context): File = nativeSource(ctx) ?: File(ctx.applicationInfo.dataDir, "ccspeed-bin/ccspeed").also { it.parentFile?.mkdirs() }
+    private fun binaryFile(ctx: Context): File = File(ctx.filesDir, "ccspeed-bin/libccspeed.so").also { it.parentFile?.mkdirs() }
 
     /**
      * 直接从 nativeLibraryDir 取 ccspeed ELF：APK installer 解压 jniLibs/
@@ -37,17 +37,41 @@ object CcspeedRuntime {
      * untrusted_app exec（run 44984072424 staged 到 dataDir/ccspeed-bin 报
      * execute_no_trans denied，SELinux 拦 dataDir 放行 nativeLibraryDir）。
      * 命名必须 lib*.so 否则 installer 不抽（v2rayNG/Xray 同款姿势）。
+     *
+     * 关键：installer 解压 .so 时默认 644 无执行位，必须显式 setExecutable。
+     * 若 nativeLibraryDir 只读无法加位，则回退 copy 到 filesDir/ccspeed-bin/ 再 exec。
      */
     private fun nativeSource(ctx: Context): File? {
-        val abis = Build.SUPPORTED_ABIS ?: emptyArray()
         val libDir = ctx.applicationInfo.nativeLibraryDir ?: return null
-        val path = "$libDir/libccspeed.so"
-        val f = File(path)
-        if (!f.exists() || !f.canExecute()) {
-            Log.w(TAG, "native source unavailable: $path exists=${f.exists()} exec=${f.canExecute()} abis=${abis.toList()} libDir=$libDir")
+        val src = File(libDir, "libccspeed.so")
+        if (!src.exists()) {
+            Log.w(TAG, "native source not found: ${src.absolutePath}")
             return null
         }
-        return f
+        // 尝试加执行位（nativeLibraryDir 通常只读，setExecutable 可能失败/静默忽略）
+        if (!src.canExecute()) {
+            try { src.setExecutable(true, false) } catch (_: Throwable) { }
+        }
+        if (src.canExecute()) {
+            Log.i(TAG, "native source executable at nativeLibraryDir: ${src.absolutePath}")
+            return src
+        }
+        // 回退：copy 到 filesDir/ccspeed-bin/ 再 exec（Termux/v2rayNG 同款姿势）
+        val dst = binaryFile(ctx)
+        try {
+            src.inputStream().use { input ->
+                dst.outputStream().use { output -> input.copyTo(output, 256 * 1024) }
+            }
+            dst.setExecutable(true, false)
+            if (dst.canExecute()) {
+                Log.i(TAG, "native source copied to filesDir executable: ${dst.absolutePath}")
+                return dst
+            }
+        } catch (e: Throwable) {
+            Log.e(TAG, "copy to filesDir failed", e)
+        }
+        Log.e(TAG, "native source not executable anywhere: src=${src.absolutePath} canExec=${src.canExecute()} dst=${dst.absolutePath} canExec=${dst.canExecute()}")
+        return null
     }
 
     /** 幂等：若 nativeSource 可直接 exec 就直接返回，不再 copy。 */
@@ -66,11 +90,11 @@ object CcspeedRuntime {
         killStale()
         val bin = ensureBinary(ctx)
         if (bin == null) {
-            lastLog = "no native source (nativeLibraryDir 缺 ccspeed ELF)"
+            lastLog = "no native source (nativeLibraryDir 缺 ccspeed ELF 或无法 setExecutable)"
             Log.e(TAG, lastLog)
             return false
         }
-        Log.i(TAG, "abi=${Build.SUPPORTED_ABIS.toList()} binary=${bin.absolutePath}")
+        Log.i(TAG, "abi=${Build.SUPPORTED_ABIS.toList()} binary=${bin.absolutePath} canExec=${bin.canExecute()}")
         val pb = ProcessBuilder(
             bin.absolutePath,
             "-listen", LISTEN,
