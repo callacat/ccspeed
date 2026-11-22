@@ -1,9 +1,7 @@
 name: build
-
 on:
   push:
     branches: [main]
-    tags: ['v*']
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -54,7 +52,6 @@ jobs:
         run: |
           set -e
           mkdir -p dist
-          # Inject version: tag for tag builds, short sha for push builds
           VERSION="${{ github.ref_name }}"
           if [[ "${{ github.ref }}" != refs/tags/* ]]; then
             VERSION="dev-${{ github.sha::8 }}"
@@ -77,7 +74,6 @@ jobs:
       - name: Verify embedded binaries (sha256 check)
         run: |
           set -e
-          # jniLibs ccspeed is ELF extracted to nativeLibraryDir by APK installer (selinux only allows exec there); hev is ATM JNI lib
           for f in \
             android/app/src/main/jniLibs/arm64-v8a/libccspeed.so \
             android/app/src/main/jniLibs/x86_64/libccspeed.so \
@@ -85,8 +81,6 @@ jobs:
             android/app/src/main/jniLibs/x86_64/libhev-socks5-tunnel.so; do
             sha256sum "$f"
           done
-          # APK has no credentials: Release artifacts have empty credentials (main.go defaultAPIAuth empty),
-          # Only strip obviously visible credential shapes written into binary.
           if grep -aoE 'CC_AUTH=[A-Za-z0-9_-]{16,}|CC_COMM=[A-Za-z0-9_-]{16,}' \
                android/app/src/main/jniLibs/*/libccspeed.so; then
             echo "FATAL: jniLibs credential shape detected"; exit 1
@@ -98,18 +92,10 @@ jobs:
       - name: List APK
         working-directory: android
         run: ls -la app/build/outputs/apk/debug/
-      # upload-artifact fails: account artifact storage quota full (since 10-13,
-      # usage recalculated every 6-12h still not enough). APK delivery uses release job
-      # gh release create (Release attachments and artifacts are separate quotas), push-only run
-      # only keeps "build + list artifacts" as evidence, CI green no longer blocked on upload.
       - name: SHA256 APK
         working-directory: android
         run: sha256sum app/build/outputs/apk/debug/app-debug.apk
 
-  # Real device 192.168.1.157 unreachable => device acceptance downgraded to CI AVD.
-  # GitHub ubuntu runner has KVM hardware accel; API 34 / x86_64 google_apis image
-  # Installer extracts jniLibs/x86_64/libccspeed.so to nativeLibraryDir, SELinux
-  # allows untrusted_app direct exec in nativeLibraryDir. Real device regression items in README.
   android-emulator:
     needs: [vet]
     runs-on: ubuntu-latest
@@ -122,18 +108,14 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: gradle/actions/setup-gradle@v3
-
       - name: Assemble debug APK
         working-directory: android
         run: ./gradlew assembleDebug --no-daemon -PversionName=${{ github.ref_name }}
-
       - name: Enable KVM
         run: |
           set -e
           grep -qE '(vmx|svm)' /proc/cpuinfo
-          # ubuntu-latest has nested virtualization; chown group to avoid probe failure
           sudo chown $USER /dev/kvm
-
       - name: Run AVD (API 34 / x86_64 / google_apis)
         uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -149,8 +131,6 @@ jobs:
           script: |
             set -e
             chmod +x avd-verify.sh
-            # Real device 192.168.1.157 unreachable => device acceptance downgraded to CI AVD.
-            # Detailed probes, auth chain tap, logcat criteria in android/avd-verify.sh.
             bash avd-verify.sh
 
   release:
@@ -179,7 +159,6 @@ jobs:
         run: |
           set -e
           mkdir -p dist
-          # Inject version (tag build)
           VERSION="${{ github.ref_name }}"
           build() {
             local goos=$1 goarch=$2 out=$3
