@@ -2,7 +2,8 @@
 # CMP-410 AVD 验收链：装机 → VpnService 授权 → logcat 判据 → 停止释放 → 零凭据复核。
 # 在 CI 里由 reactivecircus/android-emulator-runner 的 script: 调起（adb 已在 PATH）。
 # 真机 192.168.1.157 暂不可达 ⇒ 降级到 AVD；真机回归三项单列 backlog。
-set -euo pipefail
+# 不用 set -e：本脚本的每个探针都是「回显即证据」，一个探针失败不该掐掉后续判据。
+set -uo pipefail
 
 PKG=com.callacat.ccspeed
 APK=${APK_PATH_OVERRIDE:-app/build/outputs/apk/debug/app-debug.apk}
@@ -64,10 +65,11 @@ say "SOCKS5 127.0.0.1:1081 在听（/proc/net/tcp :0439）"
 adb shell "(grep -i ':0439' /proc/net/tcp || echo 'NO 1081 LISTEN')"
 
 say "Web 控制台 127.0.0.1:28981 应答"
-adb shell "curl -s -o /dev/null -w 'http=%{http_code}\n' http://127.0.0.1:28981/"
+# AVD google_apis 镜像没有 curl，用 toybox wget（Android 7+ 内置）
+adb shell "wget -q -O - http://127.0.0.1:28981/ 2>&1 | head -c 200; echo; echo ' [web console probe done]'"
 
-say "TUN 生效：curl 经壳出（拿出口 IP，与 AVD 自身 egress 不同即接管成功）"
-adb shell "curl -s --max-time 20 https://ifconfig.me || echo 'curl-via-tun failed'"
+say "TUN 生效：wget 经壳出（拿出口 IP，与 AVD 自身 egress 不同即接管成功）"
+adb shell "wget -q -O - --timeout=20 https://ifconfig.me 2>&1 || echo 'wget-via-tun-failed'"
 
 say "停止：service 停、native 退、tun 释放"
 adb shell am stopservice -n "$PKG/.CcspeedVpnService"
