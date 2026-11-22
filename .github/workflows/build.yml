@@ -138,81 +138,10 @@ jobs:
           working-directory: android
           script: |
             set -e
-            echo "=== adb devices ==="
-            adb devices
-            echo "=== install APK ==="
-            adb install -r app/build/outputs/apk/debug/app-debug.apk
-            echo "=== launch ==="
-            adb shell am start -n com.callacat.ccspeed/.MainActivity
-            sleep 5
-            echo "=== tap 启动 → 触发 VpnService.prepare 弹窗 ==="
-            # MainActivity 首屏三个 View：状态 TextView + 启动 Button + 控制台 Button。
-            # 用 uiautomator dump 拿坐标比硬编码稳，但 AVD 默认 480dp 宽最简做法是
-            # dump 后 awk 解「启动」bounds。这里直接 dump + 取第一个 Button 中心点。
-            adb shell uiautomator dump /sdcard/ui.xml
-            adb pull /sdcard/ui.xml /tmp/ui.xml
-            python3 - <<'PY'
-            import re, subprocess, sys
-            xml = open('/tmp/ui.xml').read()
-            m = re.search(r'text="启动"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', xml)
-            if not m:
-                sys.exit("未找到「启动」按钮 bounds")
-            x = (int(m.group(1)) + int(m.group(3))) // 2
-            y = (int(m.group(2)) + int(m.group(4))) // 2
-            print(f"tap 启动 at ({x},{y})")
-            subprocess.run(["adb", "shell", "input", "tap", str(x), str(y)], check=True)
-            PY
-            sleep 3
-            echo "=== tap 系统授权对话框的「确定」 ==="
-            adb shell uiautomator dump /sdcard/ui2.xml
-            adb pull /sdcard/ui2.xml /tmp/ui2.xml
-            python3 - <<'PY'
-import re, subprocess, sys
-xml = open('/tmp/ui2.xml').read()
-# AOSP 授权对话框按钮文案随 locale，x86_64 google_apis 镜像是英文：OK
-for txt in ("OK", "确定", "允许", "Allow"):
-    m = re.search(rf'text="{txt}"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', xml)
-    if m:
-        x = (int(m.group(1)) + int(m.group(3))) // 2
-        y = (int(m.group(2)) + int(m.group(4))) // 2
-        print(f"tap {txt} at ({x},{y})")
-        subprocess.run(["adb", "shell", "input", "tap", str(x), str(y)], check=True)
-        sys.exit(0)
-print("未找到授权按钮——可能弹窗文案变化，退回直接起 service")
-subprocess.run(["adb", "shell", "am", "start-foreground-service",
-                "-n", "com.callacat.ccspeed/.CcspeedVpnService"], check=True)
-PY
-            sleep 10
-            echo "=== banner / ABI / TUN 判据 ==="
-            adb logcat -d -s ccspeed-runtime:I ccspeed-vpn:I ccspeed-main:I | tail -80
-            echo "=== 进程 / TUN 存活 ==="
-            adb shell "ps -A | grep -E 'ccspeed|hev' || true"
-            adb shell "ip -o addr show tun0 || true"
-            echo "=== SOCKS5 127.0.0.1:1081 端口在听（0x0439）==="
-            adb shell "(cat /proc/net/tcp | grep -i ':0439' || true)"
-            echo "=== Web 控制台 127.0.0.1:28981 应答 ==="
-            adb shell "curl -s -o /dev/null -w 'http=%{http_code}\n' http://127.0.0.1:28981/"
-            echo "=== TUN 生效（curl 经壳出）==="
-            adb shell "curl -s --max-time 15 https://ifconfig.me || true"
-            echo "=== 停止：service 停、native 退、端口释放 ==="
-            adb shell am stopservice -n com.callacat.ccspeed/.CcspeedVpnService
-            sleep 4
-            adb shell "ps -A | grep -E 'ccspeed|hev' || echo 'no ccspeed/hev process'"
-            adb shell "ip -o addr show tun0 || echo 'tun0 gone'"
-            echo "=== APK assets 零凭据复核 ==="
-            APK_PATH="$(adb shell pm path com.callacat.ccspeed | head -1 | sed 's/^package://' | tr -d '\r')"
-            echo "apk=$APK_PATH"
-            # zipalign noCompress of ccspeed ELFs still strings-able after pull
-            adb pull "$APK_PATH" /tmp/installed.apk
-            HIT=$(python3 -c "
-            import re,sys
-            data=open('/tmp/installed.apk','rb').read()
-            hits=re.findall(rb'CC_AUTH=[A-Za-z0-9_-]{16,}|CC_COMM=[A-Za-z0-9_-]{16,}',data)
-            print(len(hits))
-            ")
-            echo "credential-shape hits in APK = $HIT"
-            [ "$HIT" = "0" ] || { echo 'FATAL: APK 命中凭据形状'; exit 1; }
-            echo "=== adb install / logcat 全过则 gate 通过 ==="
+            chmod +x avd-verify.sh
+            # 真机 192.168.1.157 暂不可达 ⇒ 装机验收降级到 CI 内 AVD。
+            # 详细探针、授权链 tap、logcat 判据见 android/avd-verify.sh。
+            bash avd-verify.sh
 
   release:
     needs: [build, android]
