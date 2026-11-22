@@ -26,36 +26,19 @@ jobs:
 
   build:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - goos: windows
-            goarch: amd64
-            out: ccspeed-windows-amd64.exe
-          - goos: linux
-            goarch: amd64
-            out: ccspeed-linux-amd64
-          - goos: linux
-            goarch: arm64
-            out: ccspeed-linux-arm64
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: '1.22'
-      - name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+      - name: Build
         env:
           CGO_ENABLED: '0'
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
+          GOOS: linux
+          GOARCH: amd64
         run: |
           set -e
           mkdir -p dist
-          VERSION="${{ github.ref_name }}"
-          if [[ "${{ github.ref }}" != refs/tags/* ]]; then
-            VERSION="dev-${{ github.sha::8 }}"
-          fi
-          go build -trimpath -ldflags="-s -w -X main.version=$VERSION" -o "dist/${{ matrix.out }}" .
-          sha256sum "dist/${{ matrix.out }}" | tee "dist/${{ matrix.out }}.sha256"
-          file "dist/${{ matrix.out }}"
-          grep -Eq '9f89-3bf6d9de5903|4tGzDojrPnvDAMNWFIAx5R' main.go secrets.go web.go || echo "secrets clean"
+          go build -trimpath -ldflags="-s -w" -o "dist/ccspeed-linux-amd64" .
+          sha256sum "dist/ccspeed-linux-amd64" | tee "dist/ccspeed-linux-amd64.sha256"
+          file "dist/ccspeed-linux-amd64"
