@@ -53,7 +53,7 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
         run: |
           set -e
-          mkdir -p ***
+          mkdir -p dist
           # 注入版本号：tag 构建用 tag 名，push 构建用 short sha
           VERSION="${{ github.ref_name }}"
           if [[ "${{ github.ref }}" != refs/tags/* ]]; then
@@ -178,7 +178,7 @@ jobs:
       - name: Cross-build all targets
         run: |
           set -e
-          mkdir -p ***
+          mkdir -p dist
           # 注入版本号（tag 构建）
           VERSION="${{ github.ref_name }}"
           build() {
