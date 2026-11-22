@@ -68,7 +68,7 @@ object CcspeedRuntime {
         }.start()
         process = pb
         Thread({ drainLog(pb) }, "ccspeed-log").apply { isDaemon = true }.start()
-        lastLog = "started pid=${pb.pid()}"
+        lastLog = "started alive=${pb.isAlive}"
         Log.i(TAG, lastLog)
         return true
     }

@@ -149,7 +149,7 @@ class CcspeedVpnService : VpnService() {
             @Suppress("DEPRECATION")
             Notification.Builder(this)
         }
-            .setSmallIcon(android.R.drawable.stat_sys_vpn_ic)
+            .setSmallIcon(R.drawable.ic_vpn_key)
             .setContentTitle(getString(R.string.vpn_notification_title))
             .setContentText(getString(R.string.vpn_notification_text))
             .setContentIntent(contentIntent)
