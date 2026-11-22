@@ -36,24 +36,43 @@ PY
 say "adb devices"
 adb devices
 
+say "wait-for-device"
+adb wait-for-device
+
+say "unlock + 保持唤醒"
+adb shell input keyevent KEYCODE_WAKEUP || true
+adb shell wm dismiss-keyguard || true
+
 say "install APK"
 adb install -r "$APK"
 
 say "launch MainActivity"
-adb shell am start -n "$PKG/.MainActivity"
+adb shell am start -W -n "$PKG/.MainActivity"
 sleep 5
 
-say "tap 启动 → VpnService.prepare 弹窗"
-tap_via_uiautomator ui.xml "启动" "Start"
+say "tap 启动 → VpnService.prepare 弹窗（uiautomator 起不来时退回 wakeup + 屏幕中心 tap）"
+if ! tap_via_uiautomator ui.xml "启动" "Start"; then
+    echo "WARN: uiautomator 首次未命中（run 44980563192 见 null root node），用中心坐标兜底"
+    SIZE=$(adb shell wm size | head -1 | awk '{print $NF}')
+    echo "wm size=$SIZE"
+    adb shell input keyevent KEYCODE_WAKEUP
+    # MainActivity 首屏 LinearLayout：TextView 顶部、启动 Button 约在 1/3 屏高处
+    W=$(echo "${SIZE%%x*}")
+    H=$(echo "${SIZE##*x}")
+    adb shell input tap $((W/2)) $((H/3))
+fi
 sleep 3
 
 say "tap 授权对话框（OK/确定/允许/Allow）"
-tap_via_uiautomator ui2.xml "OK" "确定" "允许" "Allow" || \
+if ! tap_via_uiautomator ui2.xml "OK" "确定" "允许" "Allow"; then
     echo "WARN: 授权按钮未命中——若 service 未起会由下面的判据暴露"
+fi
 sleep 10
 
 say "logcat banner / ABI / TUN 判据"
 adb logcat -d -s ccspeed-runtime:I ccspeed-vpn:I ccspeed-main:I | tail -80
+echo "--- drain ccspeed stdout (任务 banner / relay) ---"
+adb logcat -d | grep -E "ccspeed-linux|web console|listen=|relay |selected fastest|nodes loaded" | tail -30
 
 say "native 进程存活"
 adb shell "ps -A | grep -E 'ccspeed|hev' || echo 'NO ccspeed/hev process'"
@@ -64,18 +83,47 @@ adb shell "ip -o addr show tun0 || echo 'NO tun0'"
 say "SOCKS5 127.0.0.1:1081 在听（/proc/net/tcp :0439）"
 adb shell "(grep -i ':0439' /proc/net/tcp || echo 'NO 1081 LISTEN')"
 
-say "Web 控制台 127.0.0.1:28981 应答"
-# AVD google_apis 镜像没有 curl，用 toybox wget（Android 7+ 内置）
-adb shell "wget -q -O - http://127.0.0.1:28981/ 2>&1 | head -c 200; echo; echo ' [web console probe done]'"
+say "Web 控制台 127.0.0.1:28981 应答（AVD 无 curl/wget，adB forward + runner host curl）"
+# AVD google_apis 镜像 toybox 没有 curl/wget（run 44980563192 见
+# `wget: inaccessible or not found`），不能从 AVD 内探测。改用 adb forward 把
+# AVD 的 28981 映射到 runner host，然后用 host 的 curl 打 localhost。
+adb forward tcp:28981 tcp:28981
+echo "port-forward set"
+curl -s -o /tmp/webconsole.html -w 'web console http=%{http_code} bytes=%{size_download}\n' \
+    http://127.0.0.1:28981/ || echo "web console unreachable"
+head -c 200 /tmp/webconsole.html 2>/dev/null; echo
+adb forward --remove tcp:28981 || true
 
-say "TUN 生效：wget 经壳出（拿出口 IP，与 AVD 自身 egress 不同即接管成功）"
-adb shell "wget -q -O - --timeout=20 https://ifconfig.me 2>&1 || echo 'wget-via-tun-failed'"
+say "TUN 生效：curl 经壳出（拿出口 IP，与 AVD 自身 egress 不同即接管成功）"
+# 同法：AdbHost->AVD forward 只覆盖 28981（壳的 web）；外部出口探测改从 runner
+# host 直接打 ifconfig.me 记录基线 IP，再与经壳出去（如无主机客户端可走）作对比。
+# AVD 内无 curl/wget，本判据降级为「logcat 有 relay/隧道记录 + tun0 存在 +
+# SOCKS5 在听 + runner host 直连 ifconfig.me 记录基线 IP」。
+curl -s --max-time 20 https://ifconfig.me | tee /tmp/host_egress_ip.txt || echo "host egress fetch failed"
+echo "runner host egress baseline: $(cat /tmp/host_egress_ip.txt 2>/dev/null)"
 
-say "停止：service 停、native 退、tun 释放"
+say "gate: 每条探针都需非 FAIL（WARN 容 center-tap 兜底命中）"
+# 之前因为 set -e 去掉导致假绿：把关键判据汇总在一行，非 PASS 时 exit 1。
+FAIL=0
+adb shell "ip -o addr show tun0" | grep -q "tun0" || { echo "GATE: tun0 不存在"; FAIL=1; }
+if ! adb logcat -d | grep -q "web console http://127.0.0.1:28981"; then
+    echo "GATE: 未见 ccspeed web console banner"; FAIL=1
+fi
+adb shell "ps -A | grep -qE 'ccspeed|hev'" || { echo "GATE: native 进程未见"; FAIL=1; }
+if ! adb shell "grep -i ':0439' /proc/net/tcp" | grep -q .; then
+    echo "GATE: SOCKS5 127.0.0.1:1081 未在听"; FAIL=1
+fi
 adb shell am stopservice -n "$PKG/.CcspeedVpnService"
 sleep 4
+echo "--- after stop: native/tun0 ---"
 adb shell "ps -A | grep -E 'ccspeed|hev' || echo 'OK: no ccspeed/hev process'"
 adb shell "ip -o addr show tun0 || echo 'OK: tun0 gone'"
+
+if [ "$FAIL" = "1" ]; then
+    echo "RESULT: FAIL（见上方 GATE 行）"
+    exit 1
+fi
+echo "RESULT: PASS"
 
 say "APK assets 零凭据复核"
 APK_INSTALLED="$(adb shell pm path "$PKG" | head -1 | sed 's/^package://' | tr -d '\r')"
@@ -93,4 +141,4 @@ if [ "$HIT" != "0" ]; then
     echo "FATAL: APK 命中凭据形状"; exit 1
 fi
 
-say "gate: adb install / logcat / TUN / 停止 / 零凭据 全部回显即 PASS"
+say "gate 完成"
