@@ -202,7 +202,7 @@ jobs:
           echo "- Web console + embedded UI (credentials / node select / logs / SOCKS5 auth)" >> /tmp/release_notes.txt
           echo "- Pure Go stdlib, zero third-party deps; CGO_ENABLED=0 static build" >> /tmp/release_notes.txt
           echo "- Android thin-shell APK (Kotlin + VpnService + embedded ccspeed-linux-arm64 + hev-socks5-tunnel)" >> /tmp/release_notes.txt
-          echo "- Binaries unsigned, Windows SmartScreen blocks first run (see README §6)" >> /tmp/release_notes.txt
+          echo "- Binaries unsigned, Windows SmartScreen blocks first run (see README section 6)" >> /tmp/release_notes.txt
           gh release create "$TAG" \
             --title "ccspeed $TAG" \
             --notes-file /tmp/release_notes.txt \
