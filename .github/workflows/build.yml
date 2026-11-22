@@ -89,7 +89,7 @@ jobs:
           # Only strip obviously visible credential shapes written into binary.
           if grep -aoE 'CC_AUTH=[A-Za-z0-9_-]{16,}|CC_COMM=[A-Za-z0-9_-]{16,}' \
                android/app/src/main/jniLibs/*/libccspeed.so; then
-            echo "FATAL: jniLibs 命中凭据形状"; exit 1
+            echo "FATAL: jniLibs credential shape detected"; exit 1
           fi
           echo "jniLibs secrets clean"
       - name: Assemble debug APK
@@ -131,7 +131,7 @@ jobs:
         run: |
           set -e
           grep -qE '(vmx|svm)' /proc/cpuinfo
-          # ubuntu-latest 自带嵌套虚拟化权限；补一遍 group 只是让 action 少一次探活失败
+          # ubuntu-latest has nested virtualization; chown group to avoid probe failure
           sudo chown $USER /dev/kvm
 
       - name: Run AVD (API 34 / x86_64 / google_apis)
@@ -198,7 +198,7 @@ jobs:
           set -e
           gh release create "${{ github.ref_name }}" \
             --title "ccspeed ${{ github.ref_name }}" \
-            --notes "$(printf 'ccspeed %s\n\n- Web 控制台 + 内嵌 UI（凭据 / 选节点 / 日志 / SOCKS5 鉴权）\n- 纯 Go stdlib，零第三方依赖；CGO_ENABLED=0 静态构建\n- Android 薄壳 APK（Kotlin + VpnService + 内嵌 ccspeed-linux-arm64 + hev-socks5-tunnel）\n- 二进制未经代签名，Windows SmartScreen 首次会拦（见 README §6）\n' "${{ github.ref_name }}")" \
+            --notes "$(printf 'ccspeed %s\n\n- Web console + embedded UI (credentials / node select / logs / SOCKS5 auth)\n- Pure Go stdlib, zero third-party deps; CGO_ENABLED=0 static build\n- Android thin-shell APK (Kotlin + VpnService + embedded ccspeed-linux-arm64 + hev-socks5-tunnel)\n- Binaries unsigned, Windows SmartScreen blocks first run (see README §6)\n' "${{ github.ref_name }}")" \
             dist/ccspeed-windows-amd64.exe \
             dist/ccspeed-windows-amd64.exe.sha256 \
             dist/ccspeed-linux-amd64 \
