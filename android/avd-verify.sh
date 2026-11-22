@@ -56,21 +56,27 @@ if ! tap_via_uiautomator ui.xml "启动" "Start"; then
     SIZE=$(adb shell wm size | head -1 | awk '{print $NF}')
     echo "wm size=$SIZE"
     adb shell input keyevent KEYCODE_WAKEUP
-    # MainActivity 首屏 LinearLayout：TextView 顶部、启动 Button 约在 1/3 屏高处
     W=$(echo "${SIZE%%x*}")
     H=$(echo "${SIZE##*x}")
     adb shell input tap $((W/2)) $((H/3))
 fi
+sleep 2
+
+say "tap 授权对话框（OK/确定/允许/Allow） — 最多重试 5 次，每次 2 秒"
+for i in {1..5}; do
+    if tap_via_uiautomator "ui2_${i}.xml" "OK" "确定" "允许" "Allow"; then
+        echo "Authorization button tapped at attempt $i"
+        break
+    fi
+    echo "attempt $i: 授权按钮未找到，等待 2 秒..."
+    sleep 2
+done
 sleep 3
 
-say "tap 授权对话框（OK/确定/允许/Allow）"
-if ! tap_via_uiautomator ui2.xml "OK" "确定" "允许" "Allow"; then
-    echo "WARN: 授权按钮未命中——若 service 未起会由下面的判据暴露"
-fi
-sleep 10
-
 say "logcat banner / ABI / TUN 判据"
-adb logcat -d -s ccspeed-runtime:I ccspeed-vpn:I ccspeed-main:I | tail -80
+adb logcat -d -s ccspeed-runtime:D ccspeed-vpn:D ccspeed-main:D | tail -100
+echo "--- full logcat grep (ccspeed / VpnService / native) ---"
+adb logcat -d | grep -iE "ccspeed|VpnService|libccspeed|nativeLibraryDir|Permission denied|avc:.*denied|AndroidRuntime" | tail -60
 echo "--- drain ccspeed stdout (任务 banner / relay) ---"
 adb logcat -d | grep -E "ccspeed-linux|web console|listen=|relay |selected fastest|nodes loaded" | tail -30
 
