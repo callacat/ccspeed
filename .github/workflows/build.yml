@@ -62,7 +62,6 @@ jobs:
           grep -Eq '9f89-3bf6d9de5903|4tGzDojrPnvDAMNWFIAx5R' main.go secrets.go web.go || echo "secrets clean"
 
   android:
-    needs: vet
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
