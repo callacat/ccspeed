@@ -74,7 +74,7 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: gradle/actions/setup-gradle@v3
-      - name: Verify embedded binaries (sha256 对拍)
+      - name: Verify embedded binaries (sha256 check)
         run: |
           set -e
           # jniLibs ccspeed is ELF extracted to nativeLibraryDir by APK installer (selinux only allows exec there); hev is ATM JNI lib
@@ -196,9 +196,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -e
-          gh release create "${{ github.ref_name }}" \
-            --title "ccspeed ${{ github.ref_name }}" \
-            --notes "$(printf 'ccspeed %s\n\n- Web console + embedded UI (credentials / node select / logs / SOCKS5 auth)\n- Pure Go stdlib, zero third-party deps; CGO_ENABLED=0 static build\n- Android thin-shell APK (Kotlin + VpnService + embedded ccspeed-linux-arm64 + hev-socks5-tunnel)\n- Binaries unsigned, Windows SmartScreen blocks first run (see README §6)\n' "${{ github.ref_name }}")" \
+          TAG="${{ github.ref_name }}"
+          echo "ccspeed $TAG" > /tmp/release_notes.txt
+          echo "" >> /tmp/release_notes.txt
+          echo "- Web console + embedded UI (credentials / node select / logs / SOCKS5 auth)" >> /tmp/release_notes.txt
+          echo "- Pure Go stdlib, zero third-party deps; CGO_ENABLED=0 static build" >> /tmp/release_notes.txt
+          echo "- Android thin-shell APK (Kotlin + VpnService + embedded ccspeed-linux-arm64 + hev-socks5-tunnel)" >> /tmp/release_notes.txt
+          echo "- Binaries unsigned, Windows SmartScreen blocks first run (see README §6)" >> /tmp/release_notes.txt
+          gh release create "$TAG" \
+            --title "ccspeed $TAG" \
+            --notes-file /tmp/release_notes.txt \
             dist/ccspeed-windows-amd64.exe \
             dist/ccspeed-windows-amd64.exe.sha256 \
             dist/ccspeed-linux-amd64 \
