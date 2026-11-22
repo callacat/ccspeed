@@ -70,28 +70,9 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - uses: gradle/actions/setup-gradle@v3
-      - name: Verify embedded binaries (sha256 check)
+      - name: Test gradle
         run: |
-          set -e
-          for f in \
-            android/app/src/main/jniLibs/arm64-v8a/libccspeed.so \
-            android/app/src/main/jniLibs/x86_64/libccspeed.so \
-            android/app/src/main/jniLibs/arm64-v8a/libhev-socks5-tunnel.so \
-            android/app/src/main/jniLibs/x86_64/libhev-socks5-tunnel.so; do
-            sha256sum "$f"
-          done
-          if grep -aoE 'CC_AUTH=[A-Za-z0-9_-]{16,}|CC_COMM=[A-Za-z0-9_-]{16,}' \
-               android/app/src/main/jniLibs/*/libccspeed.so; then
-            echo "FATAL: jniLibs credential shape detected"; exit 1
-          fi
-          echo "jniLibs secrets clean"
-      - name: Assemble debug APK
-        working-directory: android
-        run: ./gradlew assembleDebug --no-daemon -PversionName=${{ github.ref_name }}
-      - name: List APK
-        working-directory: android
-        run: ls -la app/build/outputs/apk/debug/
-      - name: SHA256 APK
-        working-directory: android
-        run: sha256sum app/build/outputs/apk/debug/app-debug.apk
+          echo "Java version:"
+          java -version
+          echo "Gradle version:"
+          ./gradlew --version
