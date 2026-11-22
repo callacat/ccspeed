@@ -84,17 +84,19 @@ object CcspeedRuntime {
 
     @Synchronized
     fun start(ctx: Context): Boolean {
+        Log.i(TAG, "start:1 alive check")
         if (process?.alive() == true) return true
-        // 清残留：上次强杀后可能仍有同名进程占端口。两套资产名都 pkill，
-        // 因为 ABI 切换（真机→AVD）时上一套名字的进程可能残留。
+        Log.i(TAG, "start:2 killStale")
         killStale()
+        Log.i(TAG, "start:3 ensureBinary")
         val bin = ensureBinary(ctx)
+        Log.i(TAG, "start:4 ensureBinary done bin=${bin?.absolutePath}")
         if (bin == null) {
             lastLog = "no native source (nativeLibraryDir 缺 ccspeed ELF 或无法 setExecutable)"
             Log.e(TAG, lastLog)
             return false
         }
-        Log.i(TAG, "abi=${Build.SUPPORTED_ABIS.toList()} binary=${bin.absolutePath} canExec=${bin.canExecute()}")
+        Log.i(TAG, "start:5 abi/log binary=${bin.absolutePath} canExec=${bin.canExecute()}")
         val pb = ProcessBuilder(
             bin.absolutePath,
             "-listen", LISTEN,
