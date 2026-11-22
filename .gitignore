@@ -9,4 +9,4 @@ secrets.go.local
 # 编辑器
 .idea/
 .vscode/
-.DS_Store
+.DS_Store/ccspeed-test
