@@ -64,7 +64,6 @@ jobs:
   android:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
       - name: Test java
         run: |
           echo "Java version:"
