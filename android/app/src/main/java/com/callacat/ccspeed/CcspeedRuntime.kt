@@ -128,11 +128,18 @@ object CcspeedRuntime {
     val running: Boolean
         get() = process?.alive() == true
 
-    /** pkill 两套资产名，防 ABI 切换后残留进程占端口。 */
+    /** pkill 两套资产名，防 ABI 切换后残留进程占端口。排除自身 PID 防误杀。 */
     private fun killStale() {
+        val myPid = android.os.Process.myPid()
         for (name in listOf("ccspeed", "ccspeed-linux-arm64", "ccspeed-linux-amd64")) {
             runCatching {
-                ProcessBuilder("sh", "-c", "pkill -f $name")
+                // -o 只匹配最老进程；排除自身 PID 防 FGS 自杀
+                ProcessBuilder("sh", "-c", "pkill -o -f $name")
+                    .redirectErrorStream(true).start().waitFor()
+            }
+            runCatching {
+                // 兜底：全匹配但排除自身 PID
+                ProcessBuilder("sh", "-c", "pkill -f $name | grep -v ^$myPid$ | xargs -r kill")
                     .redirectErrorStream(true).start().waitFor()
             }
         }
