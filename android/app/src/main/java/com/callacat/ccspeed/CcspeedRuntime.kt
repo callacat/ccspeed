@@ -29,12 +29,16 @@ object CcspeedRuntime {
     var lastLog: String = ""
         private set
 
+    /** 运行时保存的 Application Context（start 时注入），供 filesDir/crashLogFile 使用 */
+    @Volatile
+    private var appContext: Context? = null
+
     /** 崩溃日志文件路径 */
     val crashLogFile: File
         get() = File(filesDir(), "crash.log")
 
     /** 应用内部文件目录（context.filesDir） */
-    private fun Context.filesDir(): File = filesDir
+    private fun filesDir(): File = appContext?.filesDir ?: throw IllegalStateException("appContext not initialized, call start() first")
 
     /**
      * 根据当前 ABI 返回 nativeLibraryDir 下的 libccspeed.so 路径。
@@ -71,6 +75,8 @@ object CcspeedRuntime {
     @Synchronized
     fun start(ctx: Context): Boolean {
         if (process?.alive() == true) return true
+        // 保存 application context 供 filesDir/crashLogFile 使用
+        appContext = ctx.applicationContext
         // 清残留：上次强杀后可能仍有同名进程占端口。两套资产名都 pkill，
         // 因为 ABI 切换（真机→AVD）时上一套名字的进程可能残留。
         killStale()
