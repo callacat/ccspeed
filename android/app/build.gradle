@@ -4,6 +4,9 @@ apply plugin: 'kotlin-android'
 android {
     namespace 'com.callacat.ccspeed'
     compileSdk 34
+    buildFeatures {
+        buildConfig true
+    }
 
     defaultConfig {
         applicationId 'com.callacat.ccspeed'
