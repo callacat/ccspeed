@@ -113,59 +113,64 @@ func main() {
 	}
 	var nodes []string
 	var err error
-	if *apiBase != "" && *node == "" {
-		group := *apiGroup
-		groupsUsed := 0
-		var lastErr error
-		if group == 0 && *apiGame == 0 {
-			// 采样多个随机 groupId，汇总节点后再测延迟选最快。
-			seen := map[string]bool{}
-			scan := *apiScanGroups
-			if scan < 1 {
-				scan = 1
-			}
-			for try := 0; try < scan*3 && groupsUsed < scan; try++ {
-				g := *apiGroupMin
-				if *apiGroupMax > *apiGroupMin {
-					g += mrand.IntN(*apiGroupMax - *apiGroupMin + 1)
+	if *apiBase != "" && *node == "" && *nodesFile == "" {
+		// 无凭据时直接用内置节点，避免无谓的 API 重试
+		if *apiAuth == "" || *apiComm == "" {
+			log.Printf("no api credentials provided, using %d builtin fallback nodes", len(fallbackNodes))
+			nodes = fallbackNodes
+		} else {
+			group := *apiGroup
+			groupsUsed := 0
+			var lastErr error
+			if group == 0 && *apiGame == 0 {
+				// 采样多个随机 groupId，汇总节点后再测延迟选最快。
+				seen := map[string]bool{}
+				scan := *apiScanGroups
+				if scan < 1 {
+					scan = 1
 				}
-				ns, e := fetchAPINodes(*apiBase, *apiAuth, *apiComm, 0, g)
-				if e != nil {
-					// 拉取失败（含缺凭据 / 上游 401）：=> 记 lastErr 并继续尝试下一组，末尾把 lastErr 冒泡
-					lastErr = e
-					log.Printf("group %d fetch failed: %v", g, e)
-					continue
-				}
-				if len(ns) == 0 {
-					// 拉到 0 条：静默 continue
-					continue
-				}
-				groupsUsed++
-				for _, n := range ns {
-					if !seen[n] {
-						seen[n] = true
-						nodes = append(nodes, n)
+				for try := 0; try < scan*3 && groupsUsed < scan; try++ {
+					g := *apiGroupMin
+					if *apiGroupMax > *apiGroupMin {
+						g += mrand.IntN(*apiGroupMax - *apiGroupMin + 1)
+					}
+					ns, e := fetchAPINodes(*apiBase, *apiAuth, *apiComm, 0, g)
+					if e != nil {
+						// 拉取失败（含缺凭据 / 上游 401）：=> 记 lastErr 并继续尝试下一组，末尾把 lastErr 冒泡
+						lastErr = e
+						log.Printf("group %d fetch failed: %v", g, e)
+						continue
+					}
+					if len(ns) == 0 {
+						// 拉到 0 条：静默 continue
+						continue
+					}
+					groupsUsed++
+					for _, n := range ns {
+						if !seen[n] {
+							seen[n] = true
+							nodes = append(nodes, n)
+						}
 					}
 				}
+			} else {
+				nodes, err = fetchAPINodes(*apiBase, *apiAuth, *apiComm, *apiGame, group)
+				if err != nil {
+					log.Fatal(err)
+				}
+				groupsUsed = 1
 			}
-		} else {
-			nodes, err = fetchAPINodes(*apiBase, *apiAuth, *apiComm, *apiGame, group)
-			if err != nil {
-				log.Fatal(err)
+			if len(nodes) == 0 {
+				// 用户提供了凭据但仍拉不到节点，报错退出
+				msg := "api returned no nodes"
+				if lastErr != nil {
+					msg = lastErr.Error()
+				}
+				fmt.Fprintln(os.Stderr, "ccspeed: "+msg)
+				os.Exit(1)
 			}
-			groupsUsed = 1
+			log.Printf("nodes loaded from API=%d groups=%d", len(nodes), groupsUsed)
 		}
-		if len(nodes) == 0 {
-			// 无论 -quiet 与否，启动失败必须让用户在 stderr 看到真实原因（缺凭据 / 上游 401），
-			// 而不是被 quiet tee 吞掉或退化成误导人的 "api returned no nodes"。
-			msg := "api returned no nodes"
-			if lastErr != nil {
-				msg = lastErr.Error()
-			}
-			fmt.Fprintln(os.Stderr, "ccspeed: "+msg)
-			os.Exit(1)
-		}
-		log.Printf("nodes loaded from API=%d groups=%d", len(nodes), groupsUsed)
 	} else {
 		nodes, err = loadNodes(*node, *nodesFile)
 		if err != nil {
