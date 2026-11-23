@@ -31,10 +31,10 @@ object CcspeedRuntime {
 
     /** 崩溃日志文件路径 */
     val crashLogFile: File
-        get() = File(filesDir, "crash.log")
+        get() = File(filesDir(), "crash.log")
 
     /** 应用内部文件目录（context.filesDir） */
-    private fun filesDir(ctx: Context): File = ctx.filesDir
+    private fun Context.filesDir(): File = filesDir
 
     /**
      * 根据当前 ABI 返回 nativeLibraryDir 下的 libccspeed.so 路径。
