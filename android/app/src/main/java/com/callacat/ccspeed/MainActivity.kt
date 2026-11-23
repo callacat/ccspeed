@@ -39,7 +39,7 @@ class MainActivity : Activity() {
                 crashFile.writeText(throwable.stackTrace.joinToString("\n") { it.toString() })
             } catch (_: Throwable) {}
         }
-        registerReceiver(vpnConflictReceiver, IntentFilter(CcspeedVpnService.ACTION_VPN_CONFLICT))
+        registerReceiver(vpnConflictReceiver, IntentFilter(CcspeedVpnService.ACTION_VPN_CONFLICT), Context.RECEIVER_NOT_EXPORTED)
         // 读取上次崩溃日志（若有）显示在状态区，避免闪退无感知
         var initStatus = "未启动 v" + BuildConfig.VERSION_NAME
         try {
