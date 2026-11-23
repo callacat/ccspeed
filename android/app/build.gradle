@@ -46,6 +46,16 @@ android {
         debug {
             minifyEnabled false
             shrinkResources false
+            buildConfigField "String", "VERSION_NAME", ""${versionName}""
+        }
+        release {
+            minifyEnabled false
+            shrinkResources false
+            buildConfigField "String", "VERSION_NAME", ""${versionName}""
+        }
+        debug {
+            minifyEnabled false
+            shrinkResources false
         }
         release {
             minifyEnabled false
