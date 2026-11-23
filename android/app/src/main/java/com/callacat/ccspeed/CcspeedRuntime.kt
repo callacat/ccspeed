@@ -91,8 +91,12 @@ object CcspeedRuntime {
             directory(ctx.filesDir)
             redirectErrorStream(true)
             environment()["HOME"] = ctx.filesDir.absolutePath
-        }.start()
-        process = pb
+        }
+        val started = runCatching { pb.start() }
+            .onFailure { Log.e(TAG, "ProcessBuilder.start failed: $it", it) }
+            .getOrNull()
+        if (started == null) return false
+        process = started
         Thread({ drainLog(pb) }, "ccspeed-log").apply { isDaemon = true }.start()
         lastLog = "started alive=${pb.isAlive}"
         Log.i(TAG, lastLog)
@@ -136,6 +140,26 @@ object CcspeedRuntime {
                 }
             }
         } catch (_: Throwable) {
+        }
+    }
+
+    /**
+     * 读取核心版本：启动临时进程跑 `<bin> -version` 取首行输出。
+     * 仅用于 UI 展示，不影响主进程。
+     */
+    @Synchronized
+    fun coreVersion(ctx: Context): String {
+        val bin = nativeBinary(ctx)
+        if (!verifyBinary(bin)) return "unknown"
+        return try {
+            val pb = ProcessBuilder(bin.absolutePath, "-version")
+                .redirectErrorStream(true)
+                .start()
+            pb.inputStream.bufferedReader().use { reader ->
+                reader.readLine() ?: "unknown"
+            }.also { pb.waitFor() }
+        } catch (_: Throwable) {
+            "unknown"
         }
     }
 }

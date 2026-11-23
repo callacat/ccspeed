@@ -1,7 +1,10 @@
 package com.callacat.ccspeed
 
 import android.app.Activity
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.net.Uri
 import android.net.VpnService
 import android.os.Bundle
@@ -15,15 +18,47 @@ import androidx.annotation.Nullable
 class MainActivity : Activity() {
     private lateinit var status: TextView
     private var wantVpn = false
+    private val vpnConflictReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == CcspeedVpnService.ACTION_VPN_CONFLICT) {
+                runOnUiThread {
+                    status.text = "VPN 冲突：其他 VPN（如 Tailscale）占用中，请关闭后重试"
+                    wantVpn = false
+                    Toast.makeText(this@MainActivity, "VPN 接口被其他应用占用，请关闭其他 VPN 后重试", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // 全局未捕获异常处理器：写 crash.log 供下次启动展示
+        Thread.setDefaultUncaughtExceptionHandler { _, throwable ->
+            try {
+                val crashFile = CcspeedRuntime.crashLogFile
+                crashFile.writeText(throwable.stackTrace.joinToString("\n") { it.toString() })
+            } catch (_: Throwable) {}
+        }
+        registerReceiver(vpnConflictReceiver, IntentFilter(CcspeedVpnService.ACTION_VPN_CONFLICT))
+        // 读取上次崩溃日志（若有）显示在状态区，避免闪退无感知
+        var initStatus = "未启动 v" + BuildConfig.VERSION_NAME
+        try {
+            val crashFile = CcspeedRuntime.crashLogFile
+            if (crashFile.exists()) {
+                val lines = crashFile.readText().trim().split("\n")
+                if (lines.isNotEmpty()) {
+                    val preview = lines.take(2).joinToString(" | ")
+                    initStatus = "上次崩溃: $preview"
+                    Log.w(TAG, "crash log found: $preview")
+                }
+            }
+        } catch (_: Throwable) {}
         val root = android.widget.LinearLayout(this).apply {
             orientation = android.widget.LinearLayout.VERTICAL
             setPadding(36, 48, 36, 48)
         }
         status = TextView(this).apply {
-            text = "未启动 v" + BuildConfig.VERSION_NAME
+            text = initStatus
             textSize = 16f
             setPadding(0, 0, 0, 24)
         }
@@ -39,6 +74,11 @@ class MainActivity : Activity() {
         root.addView(toggle)
         root.addView(console)
         setContentView(root)
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        try { unregisterReceiver(vpnConflictReceiver) } catch (_: Throwable) {}
     }
 
     private fun onStartClicked() {
@@ -75,7 +115,9 @@ class MainActivity : Activity() {
 
     private fun startVpn() {
         CcspeedVpnService.start(this)
-        status.text = "运行中 · 控制台 ${CcspeedRuntime.WEB_URL}"
+        val shellVer = BuildConfig.VERSION_NAME
+        val coreVer = CcspeedRuntime.coreVersion(this)
+        status.text = "壳 v$shellVer · 核心 v$coreVer · 控制台 ${CcspeedRuntime.WEB_URL}"
     }
 
     private fun openConsole() {
