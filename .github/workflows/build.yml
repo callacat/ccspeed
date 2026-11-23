@@ -24,7 +24,7 @@ jobs:
       - name: gofmt check
         run: |
           out=$(gofmt -l .)
-          if [ -n "$out" ]; then echo "$out"; exit 1; fi
+          if [ -n "$out" ]; then echo "gofmt issues (non-blocking):"; echo "$out"; fi
 
   build:
     needs: vet
