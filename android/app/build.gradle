@@ -46,20 +46,31 @@ android {
         debug {
             minifyEnabled false
             shrinkResources false
-            buildConfigField "String", "VERSION_NAME", ""${versionName}""
+            buildConfigField "String", "VERSION_NAME", "\"${versionName}\""
         }
         release {
             minifyEnabled false
             shrinkResources false
-            buildConfigField "String", "VERSION_NAME", ""${versionName}""
+            buildConfigField "String", "VERSION_NAME", "\"${versionName}\""
         }
+    }
+
+    aaptOptions {
+        // 不压缩，安装器直接解压到 lib/<abi>/
+        noCompress 'libccspeed.so', 'libhev-socks5-tunnel.so'
+    }
+
+    packaging {
+        jniLibs {
+            // 必须显式开启 legacy packaging，否则 AGP 8.x 会拒绝把 libccspeed.so 抽取到 nativeLibraryDir
+            //（报错: "jniLibs.useLegacyPackaging=false but libccspeed.so is not a standard JNI library"）
+            useLegacyPackaging = true
+        }
+    }
+
+    signingConfigs {
         debug {
-            minifyEnabled false
-            shrinkResources false
-        }
-        release {
-            minifyEnabled false
-            shrinkResources false
+            // CI 里用环境变量里的 debug keystore（不存在时用 AGP 自动生成的 ~/.android）
         }
     }
 
