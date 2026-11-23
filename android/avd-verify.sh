@@ -10,7 +10,6 @@ APK=${APK_PATH_OVERRIDE:-app/build/outputs/apk/debug/app-debug.apk}
 say() { echo "=== $* ==="; }
 
 tap_via_uiautomator() {
-    # $1 = xml dump 文件名; $2.. = 要点的按钮文案候选（首个 hit 即点，找不到返回 1）
     local dump="$1"; shift
     adb shell uiautomator dump "/sdcard/${dump}" >/dev/null
     adb pull "/sdcard/${dump}" "/tmp/${dump}" >/dev/null
@@ -53,7 +52,7 @@ sleep 5
 
 say "tap 启动 -> VpnService.prepare 弹窗（uiautomator 起不来时退回 wakeup + 屏幕中心 tap）"
 if ! tap_via_uiautomator ui.xml "启动" "Start"; then
-    echo "WARN: uiautomator 首次未命中（run 44980563192 见 null root node），用中心坐标兜底"
+    echo "WARN: uiautomator 首次未命中，用中心坐标兜底"
     SIZE=$(adb shell wm size | head -1 | awk '{print $NF}')
     echo "wm size=$SIZE"
     adb shell input keyevent KEYCODE_WAKEUP
@@ -76,7 +75,6 @@ for i in {1..5}; do
 done
 if [ "$AUTH_TAPPED" = "0" ]; then
     echo "ERROR: 授权对话框按钮未找到，可能授权弹窗未出现或文案不匹配"
-    # 兜底：屏幕中心点击
     SIZE=$(adb shell wm size | head -1 | awk '{print $NF}')
     W=$(echo "${SIZE%%x*}")
     H=$(echo "${SIZE##*x}")
@@ -101,25 +99,35 @@ say "SOCKS5 127.0.0.1:1081 在听（/proc/net/tcp :0439）"
 adb shell "(grep -i ':0439' /proc/net/tcp || echo 'NO 1081 LISTEN')"
 
 say "Web 控制台 127.0.0.1:28981 应答（AVD 无 curl，用 wget；adb forward + runner host wget）"
-# AVD google_apis 镜像 toybox 有 wget 无 curl（run 44980563192 见
-# `wget: inaccessible or not found` 是旧版本，新版 toybox 自带 wget）。
-# 改用 adb forward 把 AVD 的 28981 映射到 runner host，然后用 host 的 wget 打 localhost。
 adb forward tcp:28981 tcp:28981
 echo "port-forward set"
-wget -q -O /tmp/webconsole.html --server-response http://127.0.0.1:28981/ 2>&1 | grep -E "HTTP|Length" | tail-2
-head -c 200 /tmp/webconsole.html 2>/dev/null; echo
+# 等待 web 端口就绪，最多重试 10 次
+WEB_OK=0
+for i in {1..10}; do
+    if wget -q -O /tmp/webconsole.html --server-response --timeout=5 http://127.0.0.1:28981/ 2>&1 | grep -E "HTTP|Length" | tail -2; then
+        echo "web console responded OK"
+        head -c 200 /tmp/webconsole.html 2>/dev/null; echo
+        WEB_OK=1
+        break
+    fi
+    echo "web console not ready, retry $i/10..."
+    sleep 2
+done
 adb forward --remove tcp:28981 || true
 
+say "native 进程详细状态"
+adb shell "ps -A | grep -E 'ccspeed|hev' || echo 'NO ccspeed/hev process'"
+adb shell "cat /proc/net/tcp /proc/net/tcp6 2>/dev/null | grep -E ':0439|:70C5' || echo 'no ports listening'"
+adb shell "netstat -tlnp 2>/dev/null | grep -E ':1081|:28981' || echo 'netstat no ports'"
+
 say "TUN 生效：wget 经壳出（拿出口 IP，与 AVD 自身 egress 不同即接管成功）"
-# 同法：AdbHost->AVD forward 只覆盖 28981（壳的 web）；外部出口探测改从 runner
-# host 直接打 ifconfig.me 记录基线 IP，再与经壳出去（如无主机客户端可走）作对比。
-# AVD 内无 curl，用 wget；runner host 直连 ifconfig.me 记录基线 IP。
+adb forward tcp:28981 tcp:28981
 wget -q -O /tmp/host_egress_ip.txt --timeout=20 https://ifconfig.me 2>&1 | tail-1
 cat /tmp/host_egress_ip.txt 2>/dev/null; echo
 echo "runner host egress baseline: $(cat /tmp/host_egress_ip.txt 2>/dev/null)"
+adb forward --remove tcp:28981 || true
 
 say "gate: 每条探针都需非 FAIL（WARN 容 center-tap 兜底命中）"
-# 之前因为 set -e 去掉导致假绿：把关键判据汇总在一行，非 PASS 时 exit 1。
 FAIL=0
 adb shell "ip -o addr show tun0" | grep -q "tun0" || { echo "GATE: tun0 不存在"; FAIL=1; }
 if ! adb logcat -d | grep -q "web console http://127.0.0.1:28981"; then
@@ -139,16 +147,17 @@ adb shell "ip -o addr show tun0 || echo 'OK: tun0 gone'"
 
 if [ "$FAIL" = "1" ]; then
     echo "RESULT: FAIL（见上方 GATE 行）"
-    # 失败时额外收集诊断信息
     echo "=== 失败时完整诊断 ==="
-    echo "--- 完整 logcat (最后 200 行) ---"
-    adb logcat -d | tail -200
+    echo "--- 完整 logcat (最后 300 行) ---"
+    adb logcat -d | tail -300
     echo "--- 所有 ccspeed 相关进程 ---"
     adb shell "ps -A | grep -E 'ccspeed|hev' || echo 'none'"
     echo "--- 所有监听端口 ---"
     adb shell "cat /proc/net/tcp /proc/net/tcp6 2>/dev/null | grep -E ':0439|:70C5' || echo 'no ports'"
     echo "--- VPN 服务状态 ---"
     adb shell dumpsys activity services "$PKG/.CcspeedVpnService" 2>/dev/null || echo "no service info"
+    echo "--- native 进程完整 logcat (ccspeed-runtime) ---"
+    adb logcat -d -s ccspeed-runtime:D | tail -100
     exit 1
 fi
 echo "RESULT: PASS"
