@@ -97,8 +97,8 @@ object CcspeedRuntime {
             .getOrNull()
         if (started == null) return false
         process = started
-        Thread({ drainLog(pb) }, "ccspeed-log").apply { isDaemon = true }.start()
-        lastLog = "started alive=${pb.isAlive}"
+        Thread({ drainLog(started) }, "ccspeed-log").apply { isDaemon = true }.start()
+        lastLog = "started alive=${started.isAlive()}"
         Log.i(TAG, lastLog)
         return true
     }
