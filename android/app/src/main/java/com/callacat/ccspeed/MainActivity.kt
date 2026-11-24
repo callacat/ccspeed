@@ -18,6 +18,7 @@ import androidx.annotation.Nullable
 class MainActivity : Activity() {
     private lateinit var status: TextView
     private var wantVpn = false
+    private lateinit var toggle: Button
     private val vpnConflictReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == CcspeedVpnService.ACTION_VPN_CONFLICT) {
@@ -41,7 +42,7 @@ class MainActivity : Activity() {
         }
         registerReceiver(vpnConflictReceiver, IntentFilter(CcspeedVpnService.ACTION_VPN_CONFLICT), Context.RECEIVER_NOT_EXPORTED)
         // 读取上次崩溃日志（若有）显示在状态区，避免闪退无感知
-        var initStatus = "未启动 v" + BuildConfig.VERSION_NAME
+        var initStatus = "未启动 " + BuildConfig.VERSION_NAME
         try {
             val crashFile = CcspeedRuntime.crashLogFile
             if (crashFile.exists()) {
@@ -66,6 +67,7 @@ class MainActivity : Activity() {
             text = "启动"
             setOnClickListener { if (wantVpn) onStopClicked() else onStartClicked() }
         }
+        this.toggle = toggle
         val console = Button(this).apply {
             text = "打开控制台 http://127.0.0.1:28981"
             setOnClickListener { openConsole() }
@@ -89,6 +91,7 @@ class MainActivity : Activity() {
         } else {
             wantVpn = true
             startVpn()
+            toggle.text = "停止"
         }
     }
 
@@ -97,6 +100,7 @@ class MainActivity : Activity() {
         CcspeedVpnService.stop(this)
         CcspeedRuntime.stop()
         status.text = "已停止"
+        toggle.text = "启动"
         Log.i(TAG, "user stopped")
     }
 
@@ -117,11 +121,15 @@ class MainActivity : Activity() {
         CcspeedVpnService.start(this)
         val shellVer = BuildConfig.VERSION_NAME
         val coreVer = CcspeedRuntime.coreVersion(this)
-        status.text = "壳 v$shellVer · 核心 v$coreVer · 控制台 ${CcspeedRuntime.WEB_URL}"
+        // 去重：BuildConfig.VERSION_NAME 已含 v 前缀，coreVersion 也带 v，取其一即可
+        val displayShell = if (shellVer.startsWith("v")) shellVer else "v$shellVer"
+        val displayCore = if (coreVer.startsWith("v")) coreVer else "v$coreVer"
+        // 显示用 127.0.0.1（浏览器访问），实际绑定 0.0.0.0（VPN 路由下仍可达）
+        status.text = "壳 $displayShell · 核心 $displayCore · 控制台 http://127.0.0.1:28981/"
     }
 
     private fun openConsole() {
-        val uri = Uri.parse(CcspeedRuntime.WEB_URL)
+        val uri = Uri.parse("http://127.0.0.1:28981/")
         val i = Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         try {
             startActivity(i)

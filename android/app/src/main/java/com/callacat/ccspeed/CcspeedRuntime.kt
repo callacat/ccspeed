@@ -19,7 +19,7 @@ object CcspeedRuntime {
     private const val TAG = "ccspeed-runtime"
 
     const val LISTEN = "127.0.0.1:1081"
-    const val WEB = "127.0.0.1:28981"
+    const val WEB = "0.0.0.0:28981"
     const val WEB_URL = "http://$WEB/"
 
     @Volatile

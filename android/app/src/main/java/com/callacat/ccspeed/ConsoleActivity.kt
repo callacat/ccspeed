@@ -28,7 +28,7 @@ class ConsoleActivity : Activity() {
                 ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply { setMargins(16, 16, 16, 8) }
             setOnClickListener {
-                val uri = Uri.parse(CcspeedRuntime.WEB_URL)
+                val uri = Uri.parse("http://127.0.0.1:28981/")
                 val i = Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 startActivity(i)
             }
@@ -43,7 +43,7 @@ class ConsoleActivity : Activity() {
             settings.domStorageEnabled = true
             settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
             webViewClient = WebViewClient()
-            loadUrl(CcspeedRuntime.WEB_URL)
+            loadUrl("http://127.0.0.1:28981/")
         }
 
         root.addView(openInBrowser)
