@@ -15,7 +15,7 @@
         android:supportsRtl="true"
         android:icon="@drawable/ic_vpn_key"
         android:roundIcon="@drawable/ic_vpn_key"
-        android:theme="@android:style/Theme.DeviceDefault.Light">
+        android:theme="@style/Theme.AppCompat.Light.NoActionBar">
 
         <activity
             android:name=".MainActivity"
