@@ -313,13 +313,20 @@ func currentCreds() (string, string) { return apiAuthVal, apiCommVal }
 func startWeb(addr string) {
 	// StartWeb 兼容 ":port" 与 "host:port" 两种形态（net.Listen 已原生支持）；
 	// 这里只把 port 超范围翻译成人话 —— go stdlib 的 "invalid port" 不报具体值、易误判成 host 被拆丢。
-	if _, port, err := net.SplitHostPort(addr); err != nil {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
 		log.Printf("web console disabled: -web %q 需要 host:port 或 :port 形态: %v", addr, err)
 		return
-	} else if n, e := strconv.Atoi(port); e != nil || n < 0 || n > 65535 {
+	}
+	if n, e := strconv.Atoi(port); e != nil || n < 0 || n > 65535 {
 		log.Printf("web console disabled: -web %q 端口 %s 超出合法范围 0-65535", addr, port)
 		return
 	}
+	// 允许模拟器/真机内部浏览器访问：127.0.0.1 改绑 0.0.0.0
+	if host == "127.0.0.1" {
+		host = "0.0.0.0"
+	}
+	listenAddr := net.JoinHostPort(host, port)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
@@ -334,7 +341,7 @@ func startWeb(addr string) {
 	mux.HandleFunc("/api/select", apiSelect)
 	mux.HandleFunc("/api/logs", apiLogs)
 	mux.HandleFunc("/api/config", apiConfig)
-	ln, err := net.Listen("tcp", addr)
+	ln, err := net.Listen("tcp", listenAddr)
 	if err != nil {
 		log.Printf("web console disabled: %v", err)
 		return
