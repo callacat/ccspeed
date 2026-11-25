@@ -1,6 +1,5 @@
 package com.callacat.ccspeed
 
-import android.app.Activity
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -13,11 +12,12 @@ import android.widget.TextView
 import android.util.Log
 import android.widget.Toast
 import androidx.annotation.Nullable
+import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
 
 /** 三按钮壳。所有业务 UI 都在 Web 控制台；这里只做启停 + 打开控制台。 */
-class MainActivity : Activity() {
+class MainActivity : AppCompatActivity() {
     private lateinit var status: TextView
     private var wantVpn = false
     private lateinit var toggle: Button

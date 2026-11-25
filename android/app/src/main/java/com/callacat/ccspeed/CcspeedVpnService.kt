@@ -146,9 +146,9 @@ class CcspeedVpnService : VpnService() {
         runCatching {
             val socket = Socket()
             socket.connect(InetSocketAddress("127.0.0.1", 5555), 2000)
-            protect(socket.fd!!)
+            protect(socket)
             adbSocket = socket
-            Log.i(TAG, "ADB socket protected fd=${socket.fd}")
+            Log.i(TAG, "ADB socket protected")
         }.onFailure { Log.w(TAG, "Failed to protect ADB socket: $it") }
     }
 
