@@ -44,6 +44,18 @@ pre#logs{background:#0d0f14;border:1px solid var(--line);border-radius:8px;paddi
 .spin{display:inline-block;width:12px;height:12px;border:2px solid var(--mut);border-top-color:transparent;border-radius:50%;animation:r 1s linear infinite;vertical-align:-2px}
 @keyframes r{to{transform:rotate(360deg)}}
 .kv{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font-size:13px}
+@media (max-width: 480px){
+  .kv{grid-template-columns:1fr;gap:6px 0}
+  .kv dt{font-weight:600;color:var(--mut)}
+  .kv dd{margin:0 0 8px;padding-left:4px;border-left:3px solid var(--line)}
+  header{gap:8px}
+  .pill{font-size:11px;padding:2px 8px}
+  main{padding:12px;gap:12px}
+  .card{padding:12px}
+  .groups{grid-template-columns:1fr}
+  .node{font-size:13px;padding:8px 10px}
+  button.sm{padding:5px 10px;font-size:12px}
+}
 .kv dt{color:var(--mut)}
 .kv dd{margin:0;font-variant-numeric:tabular-nums;word-break:break-all}
 </style>
@@ -59,7 +71,14 @@ pre#logs{background:#0d0f14;border:1px solid var(--line);border-radius:8px;paddi
 <main>
   <section class="card">
     <h2>状态</h2>
-    <dl class="kv" id="status"><dt>节点</dt><dd>加载中…</dd></dl>
+    <dl class="kv" id="status">
+      <dt>节点</dt><dd id="node">加载中…</dd>
+      <dt>名称</dt><dd id="node_name">—</dd>
+      <dt>分组</dt><dd id="node_group">—</dd>
+      <dt>延迟</dt><dd id="latency">未测</dd>
+      <dt>候选节点</dt><dd id="nodes_count">—</dd>
+      <dt>UDP 网关</dt><dd id="udp_node">—</dd>
+    </dl>
     <div class="row" style="margin-top:10px">
       <button class="ghost sm" id="btn-refresh">刷新</button>
       <button class="ghost sm" id="btn-refast">重新测速选最快</button>
@@ -111,13 +130,12 @@ async function refreshStatus(){
     $('pill-auth').textContent=s.socks_auth?'SOCKS5 需鉴权':'SOCKS5 无鉴权';
     $('pill-auth').className='pill '+(s.socks_auth?'ok':'warn');
     $('pill-rot').textContent=s.rotating?'每连接随机':'固定节点';
-    $('status').innerHTML=
-      '<dt>节点</dt><dd id="node">'+(s.node||'-')+'</dd>'+
-      '<dt>名称</dt><dd>'+(s.node_name||'-')+'</dd>'+
-      '<dt>分组</dt><dd>'+(s.node_group||'-')+'</dd>'+
-      '<dt>延迟</dt><dd>'+(s.latency_ms?s.latency_ms+' ms':'未测')+'</dd>'+
-      '<dt>候选节点</dt><dd>'+s.nodes+'</dd>'+
-      '<dt>UDP 网关</dt><dd>'+(s.udp_node||'-')+'</dd>';
+    $('node').textContent=s.node||'-';
+    $('node_name').textContent=s.node_name||'-';
+    $('node_group').textContent=s.node_group||'-';
+    $('latency').textContent=s.latency_ms?s.latency_ms+' ms':'未测';
+    $('nodes_count').textContent=s.nodes;
+    $('udp_node').textContent=s.udp_node||'-';
   }catch(e){$('pill-listen').textContent='离线';$('pill-listen').className='pill warn'}
 }
 async function refreshNodes(){
