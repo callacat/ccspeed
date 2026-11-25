@@ -4,7 +4,6 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.net.Uri
 import android.net.VpnService
 import android.os.Bundle
 import android.widget.Button
@@ -138,17 +137,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun openConsole() {
-        val uri = Uri.parse("http://127.0.0.1:28981/")
-        val i = Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        try {
-            startActivity(i)
-        } catch (e: android.content.ActivityNotFoundException) {
-            // 真机无浏览器时兜底 WebView 一行页，避免「点了没反应」
-            startActivity(
-                Intent(this, ConsoleActivity::class.java)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-            )
-        }
+        // 始终使用内置 WebView，避免外部浏览器跨网络命名空间访问不了
+        startActivity(
+            Intent(this, ConsoleActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+        )
     }
 
     companion object {
