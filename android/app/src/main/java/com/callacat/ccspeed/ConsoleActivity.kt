@@ -42,7 +42,18 @@ class ConsoleActivity : Activity() {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
             settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-            webViewClient = WebViewClient()
+            webViewClient = object : WebViewClient() {
+                override fun onReceivedError(view: WebView, request: android.webkit.WebResourceRequest?, error: android.webkit.WebResourceError) {
+                    android.util.Log.e("ConsoleActivity", "WebView error: ${error.description}")
+                    // 尝试备用地址
+                    if (request?.url?.toString()?.startsWith("http://127.0.0.1:28981/") == true) {
+                        view.loadUrl("http://10.0.2.2:28981/")
+                    }
+                }
+                override fun onReceivedHttpError(view: WebView, request: android.webkit.WebResourceRequest?, errorResponse: android.webkit.WebResourceResponse?) {
+                    android.util.Log.e("ConsoleActivity", "WebView HTTP error: ${errorResponse?.statusCode}")
+                }
+            }
             loadUrl("http://127.0.0.1:28981/")
         }
 
