@@ -13,6 +13,8 @@ import android.widget.TextView
 import android.util.Log
 import android.widget.Toast
 import androidx.annotation.Nullable
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
 
 /** 三按钮壳。所有业务 UI 都在 Web 控制台；这里只做启停 + 打开控制台。 */
 class MainActivity : Activity() {
@@ -76,6 +78,13 @@ class MainActivity : Activity() {
         root.addView(toggle)
         root.addView(console)
         setContentView(root)
+
+        // Observe runtime running state to keep button text in sync
+        lifecycleScope.launch {
+            CcspeedRuntime.runningFlow.collect { running ->
+                toggle.text = if (running) "停止" else "启动"
+            }
+        }
     }
 
     override fun onDestroy() {

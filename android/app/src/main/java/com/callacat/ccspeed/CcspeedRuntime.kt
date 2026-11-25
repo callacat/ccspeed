@@ -3,6 +3,8 @@ package com.callacat.ccspeed
 import android.content.Context
 import android.os.Build
 import android.util.Log
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import java.io.File
 
 /**
@@ -24,6 +26,10 @@ object CcspeedRuntime {
 
     @Volatile
     private var process: Process? = null
+
+    /** Running state flow for UI observation */
+    private val _running = MutableStateFlow(false)
+    val runningFlow = _running.asStateFlow()
 
     @Volatile
     var lastLog: String = ""
@@ -97,6 +103,7 @@ object CcspeedRuntime {
             .getOrNull()
         if (started == null) return false
         process = started
+        _running.value = true
         Thread({ drainLog(started) }, "ccspeed-log").apply { isDaemon = true }.start()
         lastLog = "started alive=${started.isAlive()}"
         Log.i(TAG, lastLog)
@@ -107,6 +114,7 @@ object CcspeedRuntime {
     fun stop() {
         val p = process
         process = null
+        _running.value = false
         runCatching { p?.destroy() }
         // App 不退出时 destroy 足够；双保险防僵尸进程占端口
         killStale()

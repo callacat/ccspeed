@@ -14,6 +14,12 @@ var udpNodes = []string{
 	"125.94.47.254:46405",
 }
 
+func xorBytes(b []byte) {
+	for i := range b {
+		b[i] ^= xorKey
+	}
+}
+
 func handleUDP(c net.Conn, host string, port int, udpNode string) {
 	_ = host
 	_ = port
@@ -63,6 +69,8 @@ func handleUDP(c net.Conn, host string, port int, udpNode string) {
 			if n < 14 {
 				continue
 			}
+			// XOR decrypt the entire frame from remote node
+			xorBytes(buf[:n])
 			dst := net.IP(append([]byte(nil), buf[4:8]...))
 			dport := binary.BigEndian.Uint16(buf[8:10])
 			payload := append([]byte(nil), buf[14:n]...)
@@ -97,6 +105,8 @@ func handleUDP(c net.Conn, host string, port int, udpNode string) {
 		binary.BigEndian.PutUint16(frame[8:10], uint16(dport))
 		binary.BigEndian.PutUint16(frame[10:12], uint16(dport))
 		frame = append(frame, payload...)
+		// XOR encrypt the entire frame before sending to remote node
+		xorBytes(frame)
 		if _, err := nudp.Write(frame); err != nil {
 			return
 		}

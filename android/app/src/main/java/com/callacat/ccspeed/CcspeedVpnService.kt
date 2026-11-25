@@ -12,6 +12,8 @@ import android.os.ParcelFileDescriptor
 import android.util.Log
 import hev.htproxy.TProxyService
 import java.io.File
+import java.net.InetSocketAddress
+import java.net.Socket
 
 /**
  * 薄壳 VpnService：建 TUN → 写 hev yml → 交给 libhev-socks5-tunnel 转发到
@@ -76,6 +78,9 @@ class CcspeedVpnService : VpnService() {
         tun = fd
         Log.i(TAG, "tun up fd=${fd.fd}")
 
+        // Protect ADB socket (port 5555) from VPN routing so ADB over TCP stays connected
+        protectAdbSocket()
+
         val yml = writeHevConfig()
         val ok = runCatching { TProxyService.TProxyStartService(yml, fd.fd) }
             .onFailure { Log.e(TAG, "hev start failed: $it", it) }
@@ -131,7 +136,23 @@ class CcspeedVpnService : VpnService() {
         runCatching { TProxyService.TProxyStopService() }
         runCatching { tun?.close() }
         tun = null
+        adbSocket?.close()
+        adbSocket = null
     }
+
+    /** Protect ADB socket (port 5555) from VPN routing so ADB over TCP stays connected */
+    private fun protectAdbSocket() {
+        if (adbSocket != null) return
+        runCatching {
+            val socket = Socket()
+            socket.connect(InetSocketAddress("127.0.0.1", 5555), 2000)
+            protect(socket.fd!!)
+            adbSocket = socket
+            Log.i(TAG, "ADB socket protected fd=${socket.fd}")
+        }.onFailure { Log.w(TAG, "Failed to protect ADB socket: $it") }
+    }
+
+    private var adbSocket: Socket? = null
 
     private fun startForegroundNotify() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
