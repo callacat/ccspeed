@@ -168,14 +168,16 @@ object CcspeedRuntime {
         val bin = nativeBinary(ctx)
         if (!verifyBinary(bin)) return false
 
-        // 创建 Unix domain socket pair 用于 Go -> Kotlin protectSocket IPC
-        val protectSocketPair = try {
-            val sockets = android.net.LocalSocketPair.createPair()
-            sockets
+        // 创建抽象命名空间 Unix domain socket 用于 Go -> Kotlin protectSocket IPC
+        // 格式: "ccspeed-protect-<random>"
+        val protectSocketName = "ccspeed-protect-${System.currentTimeMillis()}"
+        val serverSocket = try {
+            android.net.LocalServerSocket(protectSocketName)
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to create protect socket pair: $e")
+            Log.w(TAG, "Failed to create protect server socket: $e")
             null
         }
+        val protectFd = serverSocket?.fileDescriptor?.fd ?: -1
 
         // 创建并保护 Web 控制台监听套接字
         val webPfd = createProtectedWebSocket(ctx)
@@ -183,7 +185,7 @@ object CcspeedRuntime {
             bin.absolutePath,
             "-listen", LISTEN,
             "-web", "fd://${webPfd?.fd ?: 0}",
-            "-protect-fd", protectSocketPair?.second?.fileDescriptor?.fd?.toString() ?: "-1",
+            "-protect-fd", protectFd.toString(),
         ).apply {
             // 与壳同 dataDir，ccspeed.json 由 Web 控制台写到这里
             directory(ctx.filesDir)
@@ -194,18 +196,24 @@ object CcspeedRuntime {
             .onFailure { Log.e(TAG, "ProcessBuilder.start failed: $it", it) }
             .getOrNull()
         if (started == null) {
-            protectSocketPair?.first?.close()
-            protectSocketPair?.second?.close()
+            runCatching { serverSocket?.close() }
             return false
         }
         process = started
         _running.value = true
 
-        // 启动 protectSocket IPC 处理线程
-        protectSocketPair?.let { pair ->
+        // 接受 Go 进程连接并启动 IPC 处理线程
+        serverSocket?.let { ss ->
             Thread({
-                handleProtectSocketRequests(pair.first)
-            }, "ccspeed-protect-ipc").apply { isDaemon = true }.start()
+                try {
+                    val clientSocket = ss.accept()
+                    handleProtectSocketRequests(clientSocket)
+                } catch (e: Exception) {
+                    Log.w(TAG, "protectSocket accept failed: $e")
+                } finally {
+                    runCatching { ss.close() }
+                }
+            }, "ccspeed-protect-ipc-accept").apply { isDaemon = true }.start()
         }
 
         Thread({ drainLog(started) }, "ccspeed-log").apply { isDaemon = true }.start()
@@ -218,7 +226,7 @@ object CcspeedRuntime {
      * 处理 Go 进程发来的 protectSocket 请求。
      * 协议：每行一个请求，格式 "PROTECT <fd>\n"，响应 "OK\n" 或 "FAIL\n"。
      */
-    private fun handleProtectSocketRequests(socket: LocalSocket) {
+    private fun handleProtectSocketRequests(socket: android.net.LocalSocket) {
         val input = socket.inputStream.bufferedReader()
         val output = socket.outputStream.bufferedWriter()
         try {

@@ -24,7 +24,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -70,7 +69,8 @@ func (s *state) udp() string {
 var st = &state{}
 
 var (
-	protectFd int // fd for protect socket IPC with Kotlin side
+	protectSocketName string // abstract namespace socket name for protect socket IPC
+	protectConn       net.Conn
 )
 
 func main() {
@@ -92,11 +92,21 @@ func main() {
 	quiet := flag.Bool("quiet", true, "hide logs (set -quiet=false to show)")
 	apiAuth := flag.String("api-auth", envOr(os.Getenv("CC_AUTH"), defaultAPIAuth), "Authorization header (or CC_AUTH)")
 	apiComm := flag.String("api-comm", envOr(os.Getenv("CC_COMM"), defaultAPIComm), "comm header (or CC_COMM)")
-	protectFdFlag := flag.Int("protect-fd", -1, "fd for protect socket IPC with Kotlin side (Android only)")
+	protectSocketFlag := flag.String("protect-socket", "", "abstract namespace socket name for protect socket IPC with Kotlin side (Android only)")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 
-	protectFd = *protectFdFlag
+	protectSocketName = *protectSocketFlag
+	if protectSocketName != "" {
+		// Connect to Kotlin's LocalServerSocket in abstract namespace
+		conn, err := net.Dial("unix", "@"+protectSocketName)
+		if err != nil {
+			log.Printf("failed to connect to protect socket %s: %v", protectSocketName, err)
+		} else {
+			protectConn = conn
+			log.Printf("connected to protect socket %s", protectSocketName)
+		}
+	}
 
 	if *showVersion {
 		fmt.Println(version)
@@ -470,7 +480,7 @@ func dialAndProtect(addr string, timeout time.Duration) (net.Conn, error) {
 	dialer := &net.Dialer{
 		Timeout: timeout,
 		Control: func(network, address string, c syscall.RawConn) error {
-			if protectFd > 0 {
+			if protectConn != nil {
 				return c.Control(func(fd uintptr) {
 					if ok := protectSocketFd(int(fd)); !ok {
 						log.Printf("protectSocket failed for fd=%d, continuing anyway", fd)
@@ -486,19 +496,19 @@ func dialAndProtect(addr string, timeout time.Duration) (net.Conn, error) {
 
 // protectSocketFd sends the fd to Kotlin side for VpnService.protect() call.
 func protectSocketFd(fd int) bool {
-	if protectFd <= 0 {
+	if protectConn == nil {
 		return false
 	}
-	// Write request to the Unix domain socket pair
+	// Write request
 	req := fmt.Sprintf("PROTECT %d\n", fd)
-	_, err := syscall.Write(protectFd, []byte(req))
+	_, err := protectConn.Write([]byte(req))
 	if err != nil {
 		return false
 	}
 
 	// Read response
 	buf := make([]byte, 16)
-	n, err := syscall.Read(protectFd, buf)
+	n, err := protectConn.Read(buf)
 	if err != nil || n == 0 {
 		return false
 	}
