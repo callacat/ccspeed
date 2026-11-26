@@ -538,7 +538,7 @@ func sendFdViaUnix(socketFd uintptr, fdToSend int) bool {
 
 	// Read response (1 byte: 1=OK, 0=FAIL)
 	resp := make([]byte, 1)
-	_, err = unix.Recvmsg(int(socketFd), resp, nil, 0)
+	_, _, _, _, err = unix.Recvmsg(int(socketFd), resp, nil, 0)
 	if err != nil || len(resp) == 0 {
 		return false
 	}
