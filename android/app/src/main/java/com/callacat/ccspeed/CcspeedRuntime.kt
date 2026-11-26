@@ -113,13 +113,38 @@ object CcspeedRuntime {
     @Suppress("UNUSED_PARAMETER")
     fun createProtectedWebSocket(ctx: Context): ParcelFileDescriptor? {
         return try {
-            val channel = java.nio.channels.ServerSocketChannel.open()
-            channel.configureBlocking(true)
-            channel.socket().setReuseAddress(true)
-            channel.bind(java.net.InetSocketAddress("0.0.0.0", 28981))
-            val socket = channel.socket()
-            // 使用 fromSocket(Socket) - API 24+ 支持
-            val pfd = ParcelFileDescriptor.fromSocket(socket)
+            val serverSocket = java.net.ServerSocket()
+            serverSocket.setReuseAddress(true)
+            serverSocket.bind(java.net.InetSocketAddress("0.0.0.0", 28981))
+            // 通过反射获取 ServerSocket 内部的 fd (impl.fd)
+            var fd: Int = -1
+            try {
+                val implField = java.net.ServerSocket::class.java.getDeclaredField("impl")
+                implField.isAccessible = true
+                val impl = implField.get(serverSocket)
+                if (impl != null) {
+                    val fdField = impl.javaClass.getDeclaredField("fd")
+                    fdField.isAccessible = true
+                    val fdObj = fdField.get(impl)
+                    fd = if (fdObj is java.io.FileDescriptor) {
+                        val fdIntField = java.io.FileDescriptor::class.java.getDeclaredField("fd")
+                        fdIntField.isAccessible = true
+                        (fdIntField.get(fdObj) as? Int) ?: -1
+                    } else {
+                        (fdObj as? Int) ?: -1
+                    }
+                }
+            } catch (_: Exception) {
+                // 忽略反射失败
+            }
+            // 使用 fromFd 复制 fd 给 Go 进程 (API 24+)
+            val pfd = if (fd > 0) {
+                ParcelFileDescriptor.fromFd(fd)
+            } else {
+                Log.e(TAG, "createProtectedWebSocket: fd not found via reflection")
+                null
+            }
+            if (pfd == null) return null
             Log.i(TAG, "createProtectedWebSocket: pfd.fd=${pfd.fd}")
             pfd
         } catch (e: Exception) {
