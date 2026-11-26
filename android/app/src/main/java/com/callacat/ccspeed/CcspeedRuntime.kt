@@ -123,7 +123,11 @@ object CcspeedRuntime {
             fdField.isAccessible = true
             val fdObj = fdField.get(impl)
             val fd: Int = if (fdObj is java.io.FileDescriptor) {
-                fdObj.valid().also { Log.i(TAG, "createProtectedWebSocket: got fd=$it") }
+                // FileDescriptor 内部私有字段 fd 才是真正的 int
+                val fdIntField = java.io.FileDescriptor::class.java.getDeclaredField("fd")
+                fdIntField.isAccessible = true
+                (fdIntField.get(fdObj) as? Int) ?: -1
+                    .also { Log.i(TAG, "createProtectedWebSocket: got fd=$it") }
             } else {
                 (fdObj as? Int) ?: -1
             }
