@@ -83,20 +83,20 @@ object CcspeedRuntime {
     }
 
     /**
-     * 保护 Socket 不被 VPN 路由捕获。
-     * 使用 start() 时保存的 VpnService 实例调用 protect(Socket) (API 24+)。
+     * 保护文件描述符不被 VPN 路由捕获。
+     * 使用 start() 时保存的 VpnService 实例调用 protect(int)。
      */
-    fun protectSocket(socket: java.net.Socket): Boolean {
+    fun protectSocket(fd: Int): Boolean {
         return try {
             val vpn = vpnService
             if (vpn == null) {
                 Log.w(TAG, "protectSocket: vpnService not available")
                 false
             } else {
-                val method = android.net.VpnService::class.java.getDeclaredMethod("protect", java.net.Socket::class.java)
+                val method = android.net.VpnService::class.java.getDeclaredMethod("protect", Int::class.javaPrimitiveType)
                 method.isAccessible = true
-                val result = method.invoke(vpn, socket) as Boolean
-                Log.i(TAG, "protectSocket socket=$socket result=$result")
+                val result = method.invoke(vpn, fd) as Boolean
+                Log.i(TAG, "protectSocket fd=$fd result=$result")
                 result
             }
         } catch (e: Exception) {
@@ -112,18 +112,38 @@ object CcspeedRuntime {
     @Suppress("UNUSED_PARAMETER")
     fun createProtectedWebSocket(ctx: Context): ParcelFileDescriptor? {
         return try {
-            val channel = java.nio.channels.ServerSocketChannel.open()
-            channel.configureBlocking(true)
-            channel.socket().setReuseAddress(true)
-            channel.bind(java.net.InetSocketAddress("0.0.0.0", 28981))
-            val socket = channel.socket()
-            // 保护 Socket (API 24+ protect(Socket))
-            val protected = protectSocket(socket)
-            if (!protected) {
-                Log.w(TAG, "createProtectedWebSocket: protect(Socket) failed, continuing anyway")
+            val serverSocket = java.net.ServerSocket()
+            serverSocket.setReuseAddress(true)
+            serverSocket.bind(java.net.InetSocketAddress("0.0.0.0", 28981))
+            // 通过反射获取 ServerSocket 内部的 fd (impl.fd)
+            var fd: Int = -1
+            try {
+                val implField = java.net.ServerSocket::class.java.getDeclaredField("impl")
+                implField.isAccessible = true
+                val impl = implField.get(serverSocket)
+                if (impl != null) {
+                    val fdField = impl.javaClass.getDeclaredField("fd")
+                    fdField.isAccessible = true
+                    val fdObj = fdField.get(impl)
+                    fd = if (fdObj is java.io.FileDescriptor) {
+                        val fdIntField = java.io.FileDescriptor::class.java.getDeclaredField("fd")
+                        fdIntField.isAccessible = true
+                        (fdIntField.get(fdObj) as? Int) ?: -1
+                    } else {
+                        (fdObj as? Int) ?: -1
+                    }
+                }
+            } catch (_: Exception) {
+                // 忽略反射失败
             }
-            // 使用 fromSocket 复制 fd 给 Go 进程 (API 24+)
-            val pfd = ParcelFileDescriptor.fromSocket(socket)
+            if (fd > 0) {
+                val protected = protectSocket(fd)
+                if (!protected) {
+                    Log.w(TAG, "createProtectedWebSocket: protect failed for fd=$fd, continuing anyway")
+                }
+            }
+            // 使用 fromFd 复制 fd 给 Go 进程 (API 24+)
+            val pfd = if (fd > 0) ParcelFileDescriptor.fromFd(fd) else ParcelFileDescriptor.fromSocket(serverSocket)
             Log.i(TAG, "createProtectedWebSocket: pfd.fd=${pfd.fd}")
             pfd
         } catch (e: Exception) {
