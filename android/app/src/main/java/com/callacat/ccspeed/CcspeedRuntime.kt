@@ -122,7 +122,7 @@ object CcspeedRuntime {
             val fdField = impl.javaClass.getDeclaredField("fd")
             fdField.isAccessible = true
             val fdObj = fdField.get(impl)
-            val fd = if (fdObj is java.io.FileDescriptor) {
+            val fd: Int = if (fdObj is java.io.FileDescriptor) {
                 fdObj.valid().also { Log.i(TAG, "createProtectedWebSocket: got fd=$it") }
             } else {
                 (fdObj as? Int) ?: -1
@@ -133,8 +133,8 @@ object CcspeedRuntime {
                     Log.w(TAG, "createProtectedWebSocket: protect failed for fd=$fd, continuing anyway")
                 }
             }
-            // 复制 fd 给 Go 进程
-            val pfd = ParcelFileDescriptor.fromSocket(serverSocket)
+            // 使用 fromFd 复制 fd 给 Go 进程 (API 24+)
+            val pfd = ParcelFileDescriptor.fromFd(fd)
             Log.i(TAG, "createProtectedWebSocket: pfd.fd=${pfd.fd}")
             pfd
         } catch (e: Exception) {
