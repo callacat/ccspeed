@@ -524,7 +524,10 @@ func protectSocketFd(fd int) bool {
 	return sendFdViaUnix(f.Fd(), fd)
 }
 
+//go:build linux
+
 // sendFdViaUnix sends a file descriptor over a Unix domain socket using SCM_RIGHTS.
+// Only available on Linux (not Windows).
 func sendFdViaUnix(socketFd uintptr, fdToSend int) bool {
 	// Use unix.Sendmsg to send the fd via SCM_RIGHTS
 	// We need a dummy byte for the message
@@ -543,6 +546,13 @@ func sendFdViaUnix(socketFd uintptr, fdToSend int) bool {
 		return false
 	}
 	return resp[0] == 1
+}
+
+//go:build !linux
+
+// sendFdViaUnix stub for non-Linux platforms (Windows, etc.)
+func sendFdViaUnix(socketFd uintptr, fdToSend int) bool {
+	return false
 }
 
 type xorConn struct{ net.Conn }
