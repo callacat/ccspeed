@@ -143,7 +143,13 @@ object CcspeedRuntime {
                 }
             }
             // 使用 fromFd 复制 fd 给 Go 进程 (API 24+)
-            val pfd = if (fd > 0) ParcelFileDescriptor.fromFd(fd) else ParcelFileDescriptor.fromSocket(serverSocket)
+            val pfd = if (fd > 0) {
+                ParcelFileDescriptor.fromFd(fd)
+            } else {
+                Log.e(TAG, "createProtectedWebSocket: fd not found via reflection")
+                null
+            }
+            if (pfd == null) return null
             Log.i(TAG, "createProtectedWebSocket: pfd.fd=${pfd.fd}")
             pfd
         } catch (e: Exception) {
