@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -13,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -323,7 +325,9 @@ func startWeb(addr string) {
 		fdStr := strings.TrimPrefix(addr, "fd://")
 		fd, err := strconv.Atoi(fdStr)
 		if err != nil || fd <= 0 {
-			log.Printf("web console disabled: invalid fd://%s: %v", fdStr, err)
+			// fd 无效，自建监听套接字并通过 IPC protect
+			log.Printf("web console: fd=%d invalid, creating own listener with protect", fd)
+			startWebWithProtect(addr)
 			return
 		}
 		f := os.NewFile(uintptr(fd), "web-console-listener")
@@ -388,6 +392,58 @@ func startWeb(addr string) {
 	}
 	log.Printf("web console http://%s", ln.Addr())
 	openBrowser("http://" + ln.Addr().String())
+	if err := (&http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}).Serve(ln); err != nil {
+		log.Printf("web serve: %v", err)
+	}
+}
+
+func startWebWithProtect(addr string) {
+	// Parse host:port from addr (fd://<fd> or host:port)
+	hostPort := strings.TrimPrefix(addr, "fd://")
+	host, portStr, err := net.SplitHostPort(hostPort)
+	if err != nil {
+		log.Printf("web console disabled: invalid addr %q: %v", addr, err)
+		return
+	}
+	if host == "127.0.0.1" {
+		host = "0.0.0.0"
+	}
+	listenAddr := net.JoinHostPort(host, portStr)
+
+	// Use net.Dialer with Control function to protect socket before listen
+	dialer := &net.Dialer{
+		Control: func(network, address string, c syscall.RawConn) error {
+			if protectConn != nil {
+				return c.Control(func(fd uintptr) {
+					if ok := protectSocketFd(int(fd)); !ok {
+						log.Printf("web protectSocket failed for fd=%d, continuing anyway", fd)
+					}
+				})
+			}
+			return nil
+		},
+	}
+
+	ln, err := dialer.Listen(context.Background(), "tcp", listenAddr)
+	if err != nil {
+		log.Printf("web console disabled: %v", err)
+		return
+	}
+	log.Printf("web console (protected) http://%s", ln.Addr())
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write([]byte(uiHTML))
+	})
+	mux.HandleFunc("/api/status", apiStatus)
+	mux.HandleFunc("/api/nodes", apiNodes)
+	mux.HandleFunc("/api/select", apiSelect)
+	mux.HandleFunc("/api/logs", apiLogs)
+	mux.HandleFunc("/api/config", apiConfig)
 	if err := (&http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}).Serve(ln); err != nil {
 		log.Printf("web serve: %v", err)
 	}

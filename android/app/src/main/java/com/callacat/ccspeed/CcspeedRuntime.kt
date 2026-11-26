@@ -110,6 +110,7 @@ object CcspeedRuntime {
      * Go 端通过 os.NewFile(uintptr(fd), "") 接管。
      * 注意：控制台套接字仅供同进程 WebView 访问，不需 protect() 也可工作。
      * 使用 ParcelFileDescriptor.fromSocket (API 24+) 避免反射。
+     * 但 fromSocket 接受 Socket 而非 ServerSocket，返回 0 让 Go 自建并走 IPC protect。
      */
     @Suppress("UNUSED_PARAMETER")
     fun createProtectedWebSocket(ctx: Context): ParcelFileDescriptor? {
@@ -117,10 +118,10 @@ object CcspeedRuntime {
             val serverSocket = java.net.ServerSocket()
             serverSocket.setReuseAddress(true)
             serverSocket.bind(java.net.InetSocketAddress("0.0.0.0", 28981))
-            // 直接用 fromSocket (API 24+)
-            val pfd = ParcelFileDescriptor.fromSocket(serverSocket)
-            Log.i(TAG, "createProtectedWebSocket: pfd.fd=${pfd.fd}")
-            pfd
+            // fromSocket 只接受 Socket，ServerSocket 需反射获取 fd (Android 10+ 受限)
+            // 返回 0，让 Go 进程自建监听套接字并通过 IPC protect
+            Log.i(TAG, "createProtectedWebSocket: returning 0 (Go will create own socket)")
+            null
         } catch (e: Exception) {
             Log.e(TAG, "createProtectedWebSocket failed: $e", e)
             null
