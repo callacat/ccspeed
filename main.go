@@ -26,6 +26,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 const xorKey = 0x41
@@ -495,27 +497,52 @@ func dialAndProtect(addr string, timeout time.Duration) (net.Conn, error) {
 	return dialer.DialContext(context.Background(), "tcp", net.JoinHostPort(ip.String(), portStr))
 }
 
-// protectSocketFd sends the fd to Kotlin side for VpnService.protect() call.
+// protectSocketFd sends the fd to Kotlin side for VpnService.protect() call via SCM_RIGHTS.
 func protectSocketFd(fd int) bool {
 	if protectConn == nil {
 		return false
 	}
-	// Write request
-	req := fmt.Sprintf("PROTECT %d\n", fd)
-	_, err := protectConn.Write([]byte(req))
+
+	// Get the underlying UnixConn for SCM_RIGHTS
+	unixConn, ok := protectConn.(*net.UnixConn)
+	if !ok {
+		// Fallback: try to get raw conn via File()
+		f, err := protectConn.(*net.UnixConn).File()
+		if err != nil {
+			return false
+		}
+		defer f.Close()
+		return sendFdViaUnix(f.Fd(), fd)
+	}
+
+	f, err := unixConn.File()
 	if err != nil {
 		return false
 	}
+	defer f.Close()
 
-	// Read response
-	buf := make([]byte, 16)
-	n, err := protectConn.Read(buf)
-	if err != nil || n == 0 {
+	return sendFdViaUnix(f.Fd(), fd)
+}
+
+// sendFdViaUnix sends a file descriptor over a Unix domain socket using SCM_RIGHTS.
+func sendFdViaUnix(socketFd uintptr, fdToSend int) bool {
+	// Use unix.Sendmsg to send the fd via SCM_RIGHTS
+	// We need a dummy byte for the message
+	dummy := []byte{1} // PROTECT_FD command
+	oob := unix.UnixRights(fdToSend)
+	_, _, err := unix.Sendmsg(int(socketFd), dummy, oob, nil, 0)
+	if err != nil {
+		log.Printf("Sendmsg failed: %v", err)
 		return false
 	}
 
-	resp := string(buf[:n])
-	return strings.TrimSpace(resp) == "OK"
+	// Read response (1 byte: 1=OK, 0=FAIL)
+	resp := make([]byte, 1)
+	_, _, _, _, err = unix.Recvmsg(int(socketFd), resp, nil, 0)
+	if err != nil || len(resp) == 0 {
+		return false
+	}
+	return resp[0] == 1
 }
 
 type xorConn struct{ net.Conn }

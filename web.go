@@ -16,6 +16,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 // ---------- 日志 ring buffer ----------

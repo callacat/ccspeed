@@ -197,21 +197,40 @@ object CcspeedRuntime {
     }
 
     /**
-     * 处理 Go 进程发来的 protectSocket 请求。
-     * 协议：每行一个请求，格式 "PROTECT <fd>\n"，响应 "OK\n" 或 "FAIL\n"。
+     * 处理 Go 进程发来的 protectSocket 请求（使用 SCM_RIGHTS 传递文件描述符）。
+     * Go 端通过 unix.Sendmsg 发送 fd，Kotlin 端通过反射调用 LocalSocketImpl.receiveFileDescriptor 接收。
      */
     private fun handleProtectSocketRequests(socket: android.net.LocalSocket) {
-        val input = socket.inputStream.bufferedReader()
-        val output = socket.outputStream.bufferedWriter()
+        val input = socket.inputStream
+        val output = socket.outputStream
+        // 通过反射获取 LocalSocketImpl 的 receiveFileDescriptor 方法
+        val implClass = Class.forName("android.net.LocalSocketImpl")
+        val receiveFdMethod = implClass.getDeclaredMethod("receiveFileDescriptor")
+        receiveFdMethod.isAccessible = true
+        val getImplField = android.net.LocalSocket::class.java.getDeclaredField("mImpl")
+        getImplField.isAccessible = true
+        val impl = getImplField.get(socket)
+
         try {
+            val buffer = ByteArray(4)
             while (true) {
-                val line = input.readLine()
-                if (line == null) break // EOF
-                if (line.startsWith("PROTECT ")) {
-                    val fdStr = line.substring(8).trim()
-                    val fd = fdStr.toIntOrNull() ?: -1
-                    val ok = if (fd > 0) protectSocket(fd) else false
-                    output.write(if (ok) "OK\n" else "FAIL\n")
+                // 读取命令字节: 1=PROTECT_FD (后跟 SCM_RIGHTS fd), 0=PING
+                val cmd = input.read()
+                if (cmd == -1) break // EOF
+                if (cmd == 1) { // PROTECT_FD
+                    // 通过反射接收文件描述符
+                    val pfd = receiveFdMethod.invoke(impl) as? ParcelFileDescriptor
+                    val ok = pfd?.let {
+                        try {
+                            protectSocket(pfd.detachFd())
+                        } finally {
+                            runCatching { it.close() }
+                        }
+                    } ?: false
+                    output.write(if (ok) 1 else 0)
+                    output.flush()
+                } else if (cmd == 0) { // PING
+                    output.write(1)
                     output.flush()
                 }
             }
