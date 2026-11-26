@@ -457,10 +457,6 @@ func dialAndProtect(addr string, timeout time.Duration) (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	port, err := strconv.Atoi(portStr)
-	if err != nil {
-		return nil, err
-	}
 
 	// Resolve IP
 	ips, err := net.DefaultResolver.LookupIPAddr(context.Background(), host)
