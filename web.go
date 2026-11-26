@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -77,7 +78,13 @@ type configFile struct {
 	WebAddr   string `json:"web_addr,omitempty"`
 }
 
+// configPath 返回配置文件路径。
+// Android 上通过 CcspeedRuntime.start 设置 HOME=filesDir，优先使用 $HOME/ccspeed.json。
+// 其他平台使用 可执行文件同目录下的 ccspeed.json。
 func configPath() string {
+	if home := os.Getenv("HOME"); home != "" {
+		return filepath.Join(home, "ccspeed.json")
+	}
 	exe, err := os.Executable()
 	if err != nil {
 		return "ccspeed.json"
