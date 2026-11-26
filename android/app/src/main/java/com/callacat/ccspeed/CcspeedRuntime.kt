@@ -112,26 +112,23 @@ object CcspeedRuntime {
     @Suppress("UNUSED_PARAMETER")
     fun createProtectedWebSocket(ctx: Context): ParcelFileDescriptor? {
         return try {
-            val serverSocket = java.net.ServerSocket()
-            serverSocket.setReuseAddress(true)
-            serverSocket.bind(java.net.InetSocketAddress("0.0.0.0", 28981))
-            // 通过反射获取 ServerSocket 内部的 fd (impl.fd)
+            val channel = java.nio.channels.ServerSocketChannel.open()
+            channel.configureBlocking(true)
+            channel.socket().setReuseAddress(true)
+            channel.bind(java.net.InetSocketAddress("0.0.0.0", 28981))
+            val serverSocket = channel.socket()
+            // 通过反射获取 ServerSocketChannel 内部的 fd (更稳定)
             var fd: Int = -1
             try {
-                val implField = java.net.ServerSocket::class.java.getDeclaredField("impl")
-                implField.isAccessible = true
-                val impl = implField.get(serverSocket)
-                if (impl != null) {
-                    val fdField = impl.javaClass.getDeclaredField("fd")
-                    fdField.isAccessible = true
-                    val fdObj = fdField.get(impl)
-                    fd = if (fdObj is java.io.FileDescriptor) {
-                        val fdIntField = java.io.FileDescriptor::class.java.getDeclaredField("fd")
-                        fdIntField.isAccessible = true
-                        (fdIntField.get(fdObj) as? Int) ?: -1
-                    } else {
-                        (fdObj as? Int) ?: -1
-                    }
+                val fdField = java.nio.channels.ServerSocketChannel::class.java.getDeclaredField("fd")
+                fdField.isAccessible = true
+                val fdObj = fdField.get(channel)
+                fd = if (fdObj is java.io.FileDescriptor) {
+                    val fdIntField = java.io.FileDescriptor::class.java.getDeclaredField("fd")
+                    fdIntField.isAccessible = true
+                    (fdIntField.get(fdObj) as? Int) ?: -1
+                } else {
+                    (fdObj as? Int) ?: -1
                 }
             } catch (_: Exception) {
                 // 忽略反射失败
