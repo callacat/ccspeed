@@ -13,6 +13,8 @@ import android.widget.LinearLayout
 /**
  * 内置 WebView 控制台页：点「打开控制台」直接在应用内打开（不跳出 app，体验连续）。
  * 页面顶部提供「在浏览器打开」按钮，保留外部浏览器入口。
+ * VPN 生效时，WebView 走 VPN 隧道，回环地址会被路由进隧道导致无法访问本地控制台。
+ * 解法：VPN 生效时改用 VPN 接口 IP (10.200.0.2) 访问控制台，控制台监听 0.0.0.0:28981 覆盖该接口。
  */
 class ConsoleActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -34,6 +36,9 @@ class ConsoleActivity : Activity() {
             }
         }
 
+        // VPN 接口固定 IP，控制台监听 0.0.0.0:28981 覆盖该接口
+        val consoleUrl = "http://10.200.0.2:28981/"
+
         val web = WebView(this).apply {
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -45,8 +50,8 @@ class ConsoleActivity : Activity() {
             webViewClient = object : WebViewClient() {
                 override fun onReceivedError(view: WebView, request: android.webkit.WebResourceRequest?, error: android.webkit.WebResourceError) {
                     android.util.Log.e("ConsoleActivity", "WebView error: ${error.description}")
-                    // 尝试备用地址
-                    if (request?.url?.toString()?.startsWith("http://127.0.0.1:28981/") == true) {
+                    // 备用：尝试模拟器宿主 IP
+                    if (request?.url?.toString()?.startsWith("http://10.200.0.2:28981/") == true) {
                         view.loadUrl("http://10.0.2.2:28981/")
                     }
                 }
@@ -54,7 +59,7 @@ class ConsoleActivity : Activity() {
                     android.util.Log.e("ConsoleActivity", "WebView HTTP error: ${errorResponse?.statusCode}")
                 }
             }
-            loadUrl("http://127.0.0.1:28981/")
+            loadUrl(consoleUrl)
         }
 
         root.addView(openInBrowser)
