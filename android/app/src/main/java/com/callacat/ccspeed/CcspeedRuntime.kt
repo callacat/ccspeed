@@ -109,6 +109,7 @@ object CcspeedRuntime {
      * 创建并保护控制台 HTTP 监听套接字，返回 ParcelFileDescriptor 传给 Go 进程。
      * Go 端通过 os.NewFile(uintptr(fd), "") 接管。
      * 注意：控制台套接字仅供同进程 WebView 访问，不需 protect() 也可工作。
+     * 使用 ParcelFileDescriptor.fromSocket (API 24+) 避免反射。
      */
     @Suppress("UNUSED_PARAMETER")
     fun createProtectedWebSocket(ctx: Context): ParcelFileDescriptor? {
@@ -116,35 +117,8 @@ object CcspeedRuntime {
             val serverSocket = java.net.ServerSocket()
             serverSocket.setReuseAddress(true)
             serverSocket.bind(java.net.InetSocketAddress("0.0.0.0", 28981))
-            // 通过反射获取 ServerSocket 内部的 fd (impl.fd)
-            var fd: Int = -1
-            try {
-                val implField = java.net.ServerSocket::class.java.getDeclaredField("impl")
-                implField.isAccessible = true
-                val impl = implField.get(serverSocket)
-                if (impl != null) {
-                    val fdField = impl.javaClass.getDeclaredField("fd")
-                    fdField.isAccessible = true
-                    val fdObj = fdField.get(impl)
-                    fd = if (fdObj is java.io.FileDescriptor) {
-                        val fdIntField = java.io.FileDescriptor::class.java.getDeclaredField("fd")
-                        fdIntField.isAccessible = true
-                        (fdIntField.get(fdObj) as? Int) ?: -1
-                    } else {
-                        (fdObj as? Int) ?: -1
-                    }
-                }
-            } catch (_: Exception) {
-                // 忽略反射失败
-            }
-            // 使用 fromFd 复制 fd 给 Go 进程 (API 24+)
-            val pfd = if (fd > 0) {
-                ParcelFileDescriptor.fromFd(fd)
-            } else {
-                Log.e(TAG, "createProtectedWebSocket: fd not found via reflection")
-                null
-            }
-            if (pfd == null) return null
+            // 直接用 fromSocket (API 24+)
+            val pfd = ParcelFileDescriptor.fromSocket(serverSocket)
             Log.i(TAG, "createProtectedWebSocket: pfd.fd=${pfd.fd}")
             pfd
         } catch (e: Exception) {
@@ -177,16 +151,6 @@ object CcspeedRuntime {
             Log.w(TAG, "Failed to create protect server socket: $e")
             null
         }
-        // FileDescriptor.fd 是私有字段，需反射获取
-        val protectFd = serverSocket?.fileDescriptor?.let { fdObj ->
-            try {
-                val fdField = java.io.FileDescriptor::class.java.getDeclaredField("fd")
-                fdField.isAccessible = true
-                (fdField.get(fdObj) as? Int) ?: -1
-            } catch (_: Exception) {
-                -1
-            }
-        } ?: -1
 
         // 创建并保护 Web 控制台监听套接字
         val webPfd = createProtectedWebSocket(ctx)
@@ -194,7 +158,7 @@ object CcspeedRuntime {
             bin.absolutePath,
             "-listen", LISTEN,
             "-web", "fd://${webPfd?.fd ?: 0}",
-            "-protect-fd", protectFd.toString(),
+            "-protect-socket", protectSocketName,
         ).apply {
             // 与壳同 dataDir，ccspeed.json 由 Web 控制台写到这里
             directory(ctx.filesDir)
