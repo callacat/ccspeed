@@ -530,7 +530,7 @@ func sendFdViaUnix(socketFd uintptr, fdToSend int) bool {
 	// We need a dummy byte for the message
 	dummy := []byte{1} // PROTECT_FD command
 	oob := unix.UnixRights(fdToSend)
-	_, _, err := unix.Sendmsg(int(socketFd), dummy, oob, nil, 0)
+	err := unix.Sendmsg(int(socketFd), dummy, oob, nil, 0)
 	if err != nil {
 		log.Printf("Sendmsg failed: %v", err)
 		return false
@@ -538,7 +538,7 @@ func sendFdViaUnix(socketFd uintptr, fdToSend int) bool {
 
 	// Read response (1 byte: 1=OK, 0=FAIL)
 	resp := make([]byte, 1)
-	_, _, _, _, err = unix.Recvmsg(int(socketFd), resp, nil, 0)
+	_, err = unix.Recvmsg(int(socketFd), resp, nil, 0)
 	if err != nil || len(resp) == 0 {
 		return false
 	}
