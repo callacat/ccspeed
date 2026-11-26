@@ -2,17 +2,18 @@ package com.callacat.ccspeed
 
 import android.content.Context
 import android.os.Build
+import android.os.ParcelFileDescriptor
 import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.io.File
 
-/**
+/** 
  * ccspeed native 进程管理。二进制不走 assets → filesDir 解压 exec：Android 10+
  * SELinux 禁止 untrusted_app 执行 app_data_file 上的可执行文件（run 44984072424
  * 见 `avc: denied { execute_no_trans } path=/data/data/.../ccspeed-bin/
  * ccspeed-linux-arm64`，exec 抛 error=13 Permission denied）。
- *
+ * 
  * 改走 jniLibs/<abi>/libccspeed.so：APK installer 把它解压到 nativeLibraryDir
  * （/data/app/.../lib/<abi>/），该目录是 SELinux 允许 untrusted_app exec 的
  * native_library 区，v2rayNG / Termux 同款姿势。壳只做按 ABI 挑目录 + exec。
@@ -38,6 +39,9 @@ object CcspeedRuntime {
     /** 运行时保存的 Application Context（start 时注入），供 filesDir/crashLogFile 使用 */
     @Volatile
     private var appContext: Context? = null
+    /** VpnService 实例（start 时若传入 VpnService 则保存），供 protectSocket 使用 */
+    @Volatile
+    private var vpnService: android.net.VpnService? = null
 
     /** 崩溃日志文件路径 */
     val crashLogFile: File
@@ -78,20 +82,75 @@ object CcspeedRuntime {
         return true
     }
 
+    /**
+     * 保护文件描述符不被 VPN 路由捕获。
+     * 使用 start() 时保存的 VpnService 实例调用 protect(int)。
+     */
+    fun protectSocket(fd: Int): Boolean {
+        return try {
+            val vpn = vpnService
+            if (vpn == null) {
+                Log.w(TAG, "protectSocket: vpnService not available")
+                false
+            } else {
+                val method = android.net.VpnService::class.java.getDeclaredMethod("protect", Int::class.javaPrimitiveType)
+                method.isAccessible = true
+                val result = method.invoke(vpn, fd) as Boolean
+                Log.i(TAG, "protectSocket fd=$fd result=$result")
+                result
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "protectSocket failed: $e", e)
+            false
+        }
+    }
+
+    /**
+     * 创建并保护控制台 HTTP 监听套接字，返回 ParcelFileDescriptor 传给 Go 进程。
+     * Go 端通过 os.NewFile(uintptr(fd), "") 接管。
+     */
+    fun createProtectedWebSocket(ctx: Context): ParcelFileDescriptor? {
+        return try {
+            val serverSocket = java.net.ServerSocket()
+            serverSocket.setReuseAddress(true)
+            serverSocket.bind(java.net.InetSocketAddress("0.0.0.0", 28981))
+            val fd = serverSocket.socket.fd$
+            val protected = protectSocket(fd.valid())
+            if (!protected) {
+                Log.w(TAG, "createProtectedWebSocket: protect failed, continuing anyway")
+            }
+            // 复制 fd 给 Go 进程
+            val pfd = ParcelFileDescriptor.fromSocket(serverSocket.socket)
+            // 注意：不关闭 serverSocket，所有权转移给 pfd
+            Log.i(TAG, "createProtectedWebSocket: fd=${pfd.fd}")
+            pfd
+        } catch (e: Exception) {
+            Log.e(TAG, "createProtectedWebSocket failed: $e", e)
+            null
+        }
+    }
+
     @Synchronized
     fun start(ctx: Context): Boolean {
         if (process?.alive() == true) return true
         // 保存 application context 供 filesDir/crashLogFile 使用
         appContext = ctx.applicationContext
+        // 若传入的是 VpnService，保存引用供 protectSocket 使用
+        if (ctx is android.net.VpnService) {
+            vpnService = ctx
+        }
         // 清残留：上次强杀后可能仍有同名进程占端口。两套资产名都 pkill，
         // 因为 ABI 切换（真机→AVD）时上一套名字的进程可能残留。
         killStale()
         val bin = nativeBinary(ctx)
         if (!verifyBinary(bin)) return false
+
+        // 创建并保护 Web 控制台监听套接字
+        val webPfd = createProtectedWebSocket(ctx)
         val pb = ProcessBuilder(
             bin.absolutePath,
             "-listen", LISTEN,
-            "-web", WEB,
+            "-web", "fd://${webPfd?.fd ?: 0}",  // 传文件描述符给 Go
         ).apply {
             // 与壳同 dataDir，ccspeed.json 由 Web 控制台写到这里
             directory(ctx.filesDir)

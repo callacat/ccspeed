@@ -32,13 +32,14 @@ class CcspeedVpnService : VpnService() {
         }
         startForegroundNotify()
         Log.i(TAG, "startForegroundNotify done")
-        // 顺序很关键：先起 ccspeed（监听 1081/28981），再建 TUN 起 tun2socks。
-        // 反过来 TUN 建好但 socks5 不在时，hev 的连接会全 fail 且不自愈。
+        // 顺序调整：先建 TUN/VPN（protectSocket 需 VPN 已建立），再起 ccspeed。
+        // 这样 Web 控制台套接字可被 protectSocket 排除 VPN 路由。
+        // SOCKS5 (1081) 短暂无监听，但 hev-socks5-tunnel 连接有重试，可接受。
+        establishTunAndForward()
+        Log.i(TAG, "after establishTunAndForward")
         Log.i(TAG, "before CcspeedRuntime.start")
         CcspeedRuntime.start(this)
         Log.i(TAG, "after CcspeedRuntime.start alive=${CcspeedRuntime.running}")
-        establishTunAndForward()
-        Log.i(TAG, "after establishTunAndForward")
         return START_STICKY
     }
 
