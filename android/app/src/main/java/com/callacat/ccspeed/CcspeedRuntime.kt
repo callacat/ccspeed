@@ -119,7 +119,7 @@ object CcspeedRuntime {
             // 在类层级中搜索 fd 字段（Android 不同版本位置不同）
             var fd: Int = -1
             var clazz: Class<*> = channel.javaClass
-            while (clazz != null && fd == -1) {
+            while (clazz != null && clazz != java.lang.Object::class.java && fd == -1) {
                 try {
                     val fdField = clazz.getDeclaredField("fd")
                     fdField.isAccessible = true
