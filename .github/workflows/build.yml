@@ -90,13 +90,24 @@ jobs:
           grep -Eq '9f89-3bf6d9de5903|4tGzDojrPnvDAMNWFIAx5R' main.go secrets.go web.go || echo "secrets clean"
 
   android:
-    needs: vet
+    needs: [vet, build]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           clean: true
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - name: Build Android libccspeed.so (arm64)
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o android/app/src/main/jniLibs/arm64-v8a/libccspeed.so .
+          sha256sum android/app/src/main/jniLibs/arm64-v8a/libccspeed.so
+      - name: Build Android libccspeed.so (x86_64)
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o android/app/src/main/jniLibs/x86_64/libccspeed.so .
+          sha256sum android/app/src/main/jniLibs/x86_64/libccspeed.so
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
