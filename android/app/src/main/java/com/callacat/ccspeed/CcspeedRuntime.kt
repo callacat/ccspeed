@@ -116,13 +116,13 @@ object CcspeedRuntime {
             serverSocket.setReuseAddress(true)
             serverSocket.bind(java.net.InetSocketAddress("0.0.0.0", 28981))
             // 保护 ServerSocket 对应的 Socket（API 24+ protect(Socket)）
-            val socket = serverSocket.socket()
+            val socket = serverSocket.socket
             val protected = protectSocket(socket)
             if (!protected) {
                 Log.w(TAG, "createProtectedWebSocket: protect(Socket) failed, continuing anyway")
             }
             // 使用 fromSocket 复制 fd 给 Go 进程 (API 24+)
-            val pfd = ParcelFileDescriptor.fromSocket(serverSocket)
+            val pfd = ParcelFileDescriptor.fromSocket(socket)
             Log.i(TAG, "createProtectedWebSocket: pfd.fd=${pfd.fd}")
             pfd
         } catch (e: Exception) {
