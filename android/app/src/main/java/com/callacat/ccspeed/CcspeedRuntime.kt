@@ -117,21 +117,24 @@ object CcspeedRuntime {
             channel.socket().setReuseAddress(true)
             channel.bind(java.net.InetSocketAddress("0.0.0.0", 28981))
             val serverSocket = channel.socket()
-            // 通过反射获取 ServerSocketChannel 内部的 fd (更稳定)
+            // 在类层级中搜索 fd 字段（Android 不同版本位置不同）
             var fd: Int = -1
-            try {
-                val fdField = java.nio.channels.ServerSocketChannel::class.java.getDeclaredField("fd")
-                fdField.isAccessible = true
-                val fdObj = fdField.get(channel)
-                fd = if (fdObj is java.io.FileDescriptor) {
-                    val fdIntField = java.io.FileDescriptor::class.java.getDeclaredField("fd")
-                    fdIntField.isAccessible = true
-                    (fdIntField.get(fdObj) as? Int) ?: -1
-                } else {
-                    (fdObj as? Int) ?: -1
+            var clazz: Class<*> = channel.javaClass
+            while (clazz != null && clazz != java.lang.Object::class.java && fd == -1) {
+                try {
+                    val fdField = clazz.getDeclaredField("fd")
+                    fdField.isAccessible = true
+                    val fdObj = fdField.get(channel)
+                    fd = if (fdObj is java.io.FileDescriptor) {
+                        val fdIntField = java.io.FileDescriptor::class.java.getDeclaredField("fd")
+                        fdIntField.isAccessible = true
+                        (fdIntField.get(fdObj) as? Int) ?: -1
+                    } else {
+                        (fdObj as? Int) ?: -1
+                    }
+                } catch (_: NoSuchFieldException) {
+                    clazz = clazz.superclass
                 }
-            } catch (_: Exception) {
-                // 忽略反射失败
             }
             if (fd > 0) {
                 val protected = protectSocket(fd)
