@@ -36,8 +36,10 @@ class ConsoleActivity : Activity() {
             }
         }
 
-        // VPN 接口固定 IP，控制台监听 0.0.0.0:28981 覆盖该接口
-        val consoleUrl = "http://10.200.0.2:28981/"
+        // VPN 生效时：优先用宿主 adb forward 端口 (10.0.2.2:18981 -> 28981)，
+// 次选 VPN 接口 IP (10.200.0.2:28981)，兜底回环。
+// 注意：需提前 `adb forward tcp:18981 tcp:28981`
+        val consoleUrl = "http://10.0.2.2:18981/"
 
         val web = WebView(this).apply {
             layoutParams = LinearLayout.LayoutParams(
@@ -50,8 +52,12 @@ class ConsoleActivity : Activity() {
             webViewClient = object : WebViewClient() {
                 override fun onReceivedError(view: WebView, request: android.webkit.WebResourceRequest?, error: android.webkit.WebResourceError) {
                     android.util.Log.e("ConsoleActivity", "WebView error: ${error.description}")
-                    // 备用：尝试模拟器宿主 IP
-                    if (request?.url?.toString()?.startsWith("http://10.200.0.2:28981/") == true) {
+                    // 备用 1：VPN 接口 IP
+                    if (request?.url?.toString()?.startsWith("http://10.0.2.2:18981/") == true) {
+                        view.loadUrl("http://10.200.0.2:28981/")
+                    }
+                    // 备用 2：模拟器宿主直连（无 adb forward 时）
+                    else if (request?.url?.toString()?.startsWith("http://10.200.0.2:28981/") == true) {
                         view.loadUrl("http://10.0.2.2:28981/")
                     }
                 }
