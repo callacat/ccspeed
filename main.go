@@ -470,87 +470,22 @@ func dialAndProtect(addr string, timeout time.Duration) (net.Conn, error) {
 	}
 	ip := ips[0].IP
 
-	// Create socket
-	var fd int
-	var conn net.Conn
-	var dialErr error
-
-	// Create raw socket
-	if ip.To4() != nil {
-		fd, err = syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM|syscall.SOCK_CLOEXEC, 0)
-	} else {
-		fd, err = syscall.Socket(syscall.AF_INET6, syscall.SOCK_STREAM|syscall.SOCK_CLOEXEC, 0)
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	// Protect the socket via Kotlin IPC if available
-	if protectFd > 0 {
-		if ok := protectSocketFd(fd); !ok {
-			log.Printf("protectSocket failed for fd=%d, continuing anyway", fd)
-		}
-	}
-
-	// Set non-blocking for connect timeout
-	if err = syscall.SetNonblock(fd, true); err != nil {
-		syscall.Close(fd)
-		return nil, err
-	}
-
-	// Connect
-	var sa syscall.Sockaddr
-	if ip.To4() != nil {
-		sa = &syscall.SockaddrInet4{Port: port, Addr: [4]byte{ip[12], ip[13], ip[14], ip[15]}}
-	} else {
-		sa = &syscall.SockaddrInet6{Port: port, Addr: [16]byte{ip[0], ip[1], ip[2], ip[3], ip[4], ip[5], ip[6], ip[7], ip[8], ip[9], ip[10], ip[11], ip[12], ip[13], ip[14], ip[15]}}
-	}
-
-	err = syscall.Connect(fd, sa)
-	if err != nil && err != syscall.EINPROGRESS {
-		syscall.Close(fd)
-		return nil, err
-	}
-
-	// Wait for connect with timeout
-	if err == syscall.EINPROGRESS {
-		var wset syscall.FdSet
-		syscall.FD_ZERO(&wset)
-		syscall.FD_SET(fd, &wset)
-		tv := syscall.NsecToTimeval(int64(timeout))
-		_, err = syscall.Select(fd+1, nil, &wset, nil, &tv)
-		if err != nil {
-			syscall.Close(fd)
-			return nil, err
-		}
-		if !syscall.FD_ISSET(fd, &wset) {
-			syscall.Close(fd)
-			return nil, fmt.Errorf("connect timeout")
-		}
-		// Check for connection error
-		var soErr int
-		err = syscall.GetsockoptInt(fd, syscall.SOL_SOCKET, syscall.SO_ERROR, &soErr)
-		if err != nil || soErr != 0 {
-			syscall.Close(fd)
-			if soErr != 0 {
-				return nil, syscall.Errno(soErr)
+	// Use net.Dialer with Control function to protect socket before connect
+	dialer := &net.Dialer{
+		Timeout: timeout,
+		Control: func(network, address string, c syscall.RawConn) error {
+			if protectFd > 0 {
+				return c.Control(func(fd uintptr) {
+					if ok := protectSocketFd(int(fd)); !ok {
+						log.Printf("protectSocket failed for fd=%d, continuing anyway", fd)
+					}
+				})
 			}
-			return nil, err
-		}
+			return nil
+		},
 	}
 
-	// Convert fd to net.Conn
-	f := os.NewFile(uintptr(fd), addr)
-	conn, err = net.FileConn(f)
-	if err != nil {
-		syscall.Close(fd)
-		return nil, err
-	}
-	f.Close() // fd is duplicated by FileConn
-
-	// Set deadline
-	conn.SetDeadline(time.Now().Add(timeout))
-	return conn, nil
+	return dialer.DialContext(context.Background(), "tcp", net.JoinHostPort(ip.String(), portStr))
 }
 
 // protectSocketFd sends the fd to Kotlin side for VpnService.protect() call.
@@ -558,31 +493,20 @@ func protectSocketFd(fd int) bool {
 	if protectFd <= 0 {
 		return false
 	}
-	// Use unix domain socket to send fd via SCM_RIGHTS
-	// For simplicity, use the line-based protocol over the socket pair
-	// Note: This is a simplified version - actual fd passing requires SCM_RIGHTS
-	// For now, we use the line protocol: send "PROTECT <fd>\n" and read "OK\n"/"FAIL\n"
-	// The fd is already in the same process, so we can just pass the number
-	
-	// Create a temporary connection to the protect socket
-	// Since we're in the same process, we can write directly to the fd
-	// But the fd is a LocalSocketPair, not a regular file descriptor
-	// We need to use the protectFd (which is the socket pair fd) to communicate
-	
-	// Write request
+	// Write request to the Unix domain socket pair
 	req := fmt.Sprintf("PROTECT %d\n", fd)
 	_, err := syscall.Write(protectFd, []byte(req))
 	if err != nil {
 		return false
 	}
-	
+
 	// Read response
 	buf := make([]byte, 16)
 	n, err := syscall.Read(protectFd, buf)
 	if err != nil || n == 0 {
 		return false
 	}
-	
+
 	resp := string(buf[:n])
 	return strings.TrimSpace(resp) == "OK"
 }
