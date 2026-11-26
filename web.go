@@ -410,8 +410,8 @@ func startWebWithProtect(addr string) {
 	}
 	listenAddr := net.JoinHostPort(host, portStr)
 
-	// Use net.Dialer with Control function to protect socket before listen
-	dialer := &net.Dialer{
+	// Use net.ListenConfig with Control function to protect socket before listen
+	lc := net.ListenConfig{
 		Control: func(network, address string, c syscall.RawConn) error {
 			if protectConn != nil {
 				return c.Control(func(fd uintptr) {
@@ -424,7 +424,7 @@ func startWebWithProtect(addr string) {
 		},
 	}
 
-	ln, err := dialer.Listen(context.Background(), "tcp", listenAddr)
+	ln, err := lc.Listen(context.Background(), "tcp", listenAddr)
 	if err != nil {
 		log.Printf("web console disabled: %v", err)
 		return
