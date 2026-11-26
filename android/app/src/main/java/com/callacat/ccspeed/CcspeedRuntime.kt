@@ -112,18 +112,16 @@ object CcspeedRuntime {
     @Suppress("UNUSED_PARAMETER")
     fun createProtectedWebSocket(ctx: Context): ParcelFileDescriptor? {
         return try {
-            val serverSocket = java.net.ServerSocket()
-            serverSocket.setReuseAddress(true)
-            serverSocket.bind(java.net.InetSocketAddress("0.0.0.0", 28981))
-            // 通过反射获取 ServerSocket 内部的 ServerSocketImpl -> FileDescriptor
-            val implField = java.net.ServerSocket::class.java.getDeclaredField("impl")
-            implField.isAccessible = true
-            val impl = implField.get(serverSocket)
-            val fdField = impl.javaClass.getDeclaredField("fd")
+            // 使用 ServerSocketChannel 获取文件描述符（比反射 ServerSocket 更稳健）
+            val channel = java.nio.channels.ServerSocketChannel.open()
+            channel.configureBlocking(true)
+            channel.socket().setReuseAddress(true)
+            channel.bind(java.net.InetSocketAddress("0.0.0.0", 28981))
+            // 通过反射获取 ServerSocketChannel 内部的 file descriptor
+            val fdField = java.nio.channels.ServerSocketChannel::class.java.getDeclaredField("fd")
             fdField.isAccessible = true
-            val fdObj = fdField.get(impl)
+            val fdObj = fdField.get(channel)
             val fd: Int = if (fdObj is java.io.FileDescriptor) {
-                // FileDescriptor 内部私有字段 fd 才是真正的 int
                 val fdIntField = java.io.FileDescriptor::class.java.getDeclaredField("fd")
                 fdIntField.isAccessible = true
                 (fdIntField.get(fdObj) as? Int) ?: -1
