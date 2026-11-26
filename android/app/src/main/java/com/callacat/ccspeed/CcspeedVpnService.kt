@@ -26,6 +26,7 @@ class CcspeedVpnService : VpnService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Log.i(TAG, "onStartCommand enter action=${intent?.action}")
         if (intent?.action == ACTION_STOP) {
+            stopForeground(true)
             stopSelf()
             return START_NOT_STICKY
         }
@@ -46,6 +47,7 @@ class CcspeedVpnService : VpnService() {
     }
 
     override fun onDestroy() {
+        stopForeground(true)
         teardown()
         CcspeedRuntime.stop()
         super.onDestroy()
