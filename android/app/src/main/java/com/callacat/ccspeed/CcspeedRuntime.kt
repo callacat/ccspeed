@@ -108,48 +108,16 @@ object CcspeedRuntime {
     /**
      * 创建并保护控制台 HTTP 监听套接字，返回 ParcelFileDescriptor 传给 Go 进程。
      * Go 端通过 os.NewFile(uintptr(fd), "") 接管。
+     * 注意：控制台套接字仅供同进程 WebView 访问，不需 protect() 也可工作。
      */
     @Suppress("UNUSED_PARAMETER")
     fun createProtectedWebSocket(ctx: Context): ParcelFileDescriptor? {
         return try {
-            val channel = java.nio.channels.ServerSocketChannel.open()
-            channel.configureBlocking(true)
-            channel.socket().setReuseAddress(true)
-            channel.bind(java.net.InetSocketAddress("0.0.0.0", 28981))
-            val serverSocket = channel.socket()
-            // 在类层级中搜索 fd 字段（Android 不同版本位置不同）
-            var fd: Int = -1
-            var clazz: Class<*> = channel.javaClass
-            while (clazz != null && clazz != java.lang.Object::class.java && fd == -1) {
-                try {
-                    val fdField = clazz.getDeclaredField("fd")
-                    fdField.isAccessible = true
-                    val fdObj = fdField.get(channel)
-                    fd = if (fdObj is java.io.FileDescriptor) {
-                        val fdIntField = java.io.FileDescriptor::class.java.getDeclaredField("fd")
-                        fdIntField.isAccessible = true
-                        (fdIntField.get(fdObj) as? Int) ?: -1
-                    } else {
-                        (fdObj as? Int) ?: -1
-                    }
-                } catch (_: NoSuchFieldException) {
-                    clazz = clazz.superclass
-                }
-            }
-            if (fd > 0) {
-                val protected = protectSocket(fd)
-                if (!protected) {
-                    Log.w(TAG, "createProtectedWebSocket: protect failed for fd=$fd, continuing anyway")
-                }
-            }
-            // 使用 fromFd 复制 fd 给 Go 进程 (API 24+)
-            val pfd = if (fd > 0) {
-                ParcelFileDescriptor.fromFd(fd)
-            } else {
-                Log.e(TAG, "createProtectedWebSocket: fd not found via reflection")
-                null
-            }
-            if (pfd == null) return null
+            val serverSocket = java.net.ServerSocket()
+            serverSocket.setReuseAddress(true)
+            serverSocket.bind(java.net.InetSocketAddress("0.0.0.0", 28981))
+            // 直接用 fromSocket(ServerSocket) - API 24+ 支持
+            val pfd = ParcelFileDescriptor.fromSocket(serverSocket)
             Log.i(TAG, "createProtectedWebSocket: pfd.fd=${pfd.fd}")
             pfd
         } catch (e: Exception) {
