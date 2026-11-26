@@ -109,20 +109,33 @@ object CcspeedRuntime {
      * 创建并保护控制台 HTTP 监听套接字，返回 ParcelFileDescriptor 传给 Go 进程。
      * Go 端通过 os.NewFile(uintptr(fd), "") 接管。
      */
+    @Suppress("UNUSED_PARAMETER")
     fun createProtectedWebSocket(ctx: Context): ParcelFileDescriptor? {
         return try {
             val serverSocket = java.net.ServerSocket()
             serverSocket.setReuseAddress(true)
             serverSocket.bind(java.net.InetSocketAddress("0.0.0.0", 28981))
-            val fd = serverSocket.socket.fd$
-            val protected = protectSocket(fd.valid())
-            if (!protected) {
-                Log.w(TAG, "createProtectedWebSocket: protect failed, continuing anyway")
+            // 通过反射获取 ServerSocket 内部的 ServerSocketImpl -> FileDescriptor
+            val implField = java.net.ServerSocket::class.java.getDeclaredField("impl")
+            implField.isAccessible = true
+            val impl = implField.get(serverSocket)
+            val fdField = impl.javaClass.getDeclaredField("fd")
+            fdField.isAccessible = true
+            val fdObj = fdField.get(impl)
+            val fd = if (fdObj is java.io.FileDescriptor) {
+                fdObj.valid().also { Log.i(TAG, "createProtectedWebSocket: got fd=$it") }
+            } else {
+                (fdObj as? Int) ?: -1
+            }
+            if (fd > 0) {
+                val protected = protectSocket(fd)
+                if (!protected) {
+                    Log.w(TAG, "createProtectedWebSocket: protect failed for fd=$fd, continuing anyway")
+                }
             }
             // 复制 fd 给 Go 进程
-            val pfd = ParcelFileDescriptor.fromSocket(serverSocket.socket)
-            // 注意：不关闭 serverSocket，所有权转移给 pfd
-            Log.i(TAG, "createProtectedWebSocket: fd=${pfd.fd}")
+            val pfd = ParcelFileDescriptor.fromSocket(serverSocket)
+            Log.i(TAG, "createProtectedWebSocket: pfd.fd=${pfd.fd}")
             pfd
         } catch (e: Exception) {
             Log.e(TAG, "createProtectedWebSocket failed: $e", e)
