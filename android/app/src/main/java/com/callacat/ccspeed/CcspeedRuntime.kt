@@ -168,12 +168,22 @@ object CcspeedRuntime {
         val bin = nativeBinary(ctx)
         if (!verifyBinary(bin)) return false
 
+        // 创建 Unix domain socket pair 用于 Go -> Kotlin protectSocket IPC
+        val protectSocketPair = try {
+            val sockets = android.net.LocalSocketPair.createPair()
+            sockets
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to create protect socket pair: $e")
+            null
+        }
+
         // 创建并保护 Web 控制台监听套接字
         val webPfd = createProtectedWebSocket(ctx)
         val pb = ProcessBuilder(
             bin.absolutePath,
             "-listen", LISTEN,
-            "-web", "fd://${webPfd?.fd ?: 0}",  // 传文件描述符给 Go
+            "-web", "fd://${webPfd?.fd ?: 0}",
+            "-protect-fd", protectSocketPair?.second?.fileDescriptor?.fd?.toString() ?: "-1",
         ).apply {
             // 与壳同 dataDir，ccspeed.json 由 Web 控制台写到这里
             directory(ctx.filesDir)
@@ -183,13 +193,51 @@ object CcspeedRuntime {
         val started = runCatching { pb.start() }
             .onFailure { Log.e(TAG, "ProcessBuilder.start failed: $it", it) }
             .getOrNull()
-        if (started == null) return false
+        if (started == null) {
+            protectSocketPair?.first?.close()
+            protectSocketPair?.second?.close()
+            return false
+        }
         process = started
         _running.value = true
+
+        // 启动 protectSocket IPC 处理线程
+        protectSocketPair?.let { pair ->
+            Thread({
+                handleProtectSocketRequests(pair.first)
+            }, "ccspeed-protect-ipc").apply { isDaemon = true }.start()
+        }
+
         Thread({ drainLog(started) }, "ccspeed-log").apply { isDaemon = true }.start()
         lastLog = "started alive=${started.isAlive()}"
         Log.i(TAG, lastLog)
         return true
+    }
+
+    /**
+     * 处理 Go 进程发来的 protectSocket 请求。
+     * 协议：每行一个请求，格式 "PROTECT <fd>\n"，响应 "OK\n" 或 "FAIL\n"。
+     */
+    private fun handleProtectSocketRequests(socket: LocalSocket) {
+        val input = socket.inputStream.bufferedReader()
+        val output = socket.outputStream.bufferedWriter()
+        try {
+            while (true) {
+                val line = input.readLine()
+                if (line == null) break // EOF
+                if (line.startsWith("PROTECT ")) {
+                    val fdStr = line.substring(8).trim()
+                    val fd = fdStr.toIntOrNull() ?: -1
+                    val ok = if (fd > 0) protectSocket(fd) else false
+                    output.write(if (ok) "OK\n" else "FAIL\n")
+                    output.flush()
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "protectSocket IPC ended: $e")
+        } finally {
+            runCatching { socket.close() }
+        }
     }
 
     @Synchronized
