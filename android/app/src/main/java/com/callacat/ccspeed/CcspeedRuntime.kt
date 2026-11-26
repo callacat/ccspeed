@@ -177,7 +177,16 @@ object CcspeedRuntime {
             Log.w(TAG, "Failed to create protect server socket: $e")
             null
         }
-        val protectFd = serverSocket?.fileDescriptor?.fd ?: -1
+        // FileDescriptor.fd 是私有字段，需反射获取
+        val protectFd = serverSocket?.fileDescriptor?.let { fdObj ->
+            try {
+                val fdField = java.io.FileDescriptor::class.java.getDeclaredField("fd")
+                fdField.isAccessible = true
+                (fdField.get(fdObj) as? Int) ?: -1
+            } catch (_: Exception) {
+                -1
+            }
+        } ?: -1
 
         // 创建并保护 Web 控制台监听套接字
         val webPfd = createProtectedWebSocket(ctx)
