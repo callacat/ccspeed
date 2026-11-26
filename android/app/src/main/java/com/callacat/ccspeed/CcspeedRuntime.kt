@@ -113,11 +113,13 @@ object CcspeedRuntime {
     @Suppress("UNUSED_PARAMETER")
     fun createProtectedWebSocket(ctx: Context): ParcelFileDescriptor? {
         return try {
-            val serverSocket = java.net.ServerSocket()
-            serverSocket.setReuseAddress(true)
-            serverSocket.bind(java.net.InetSocketAddress("0.0.0.0", 28981))
-            // 直接用 fromSocket(ServerSocket) - API 24+ 支持
-            val pfd = ParcelFileDescriptor.fromSocket(serverSocket)
+            val channel = java.nio.channels.ServerSocketChannel.open()
+            channel.configureBlocking(true)
+            channel.socket().setReuseAddress(true)
+            channel.bind(java.net.InetSocketAddress("0.0.0.0", 28981))
+            val socket = channel.socket()
+            // 使用 fromSocket(Socket) - API 24+ 支持
+            val pfd = ParcelFileDescriptor.fromSocket(socket)
             Log.i(TAG, "createProtectedWebSocket: pfd.fd=${pfd.fd}")
             pfd
         } catch (e: Exception) {
