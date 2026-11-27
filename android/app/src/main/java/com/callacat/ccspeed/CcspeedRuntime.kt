@@ -199,14 +199,17 @@ object CcspeedRuntime {
             val input = ParcelFileDescriptor.AutoCloseInputStream(pfd)
             val output = ParcelFileDescriptor.AutoCloseOutputStream(pfd)
 
+            // 通过反射获取 receiveFileDescriptor 方法 (API 24+)
+            val receiveFdMethod = ParcelFileDescriptor::class.java.getMethod("receiveFileDescriptor")
+
             while (true) {
                 // 读取命令字节: 1=PROTECT_FD (后跟 SCM_RIGHTS fd), 0=PING
                 val cmd = input.read()
                 if (cmd == -1) break // EOF
                 if (cmd == 1) { // PROTECT_FD
-                    // 通过 ParcelFileDescriptor.receiveFileDescriptor 接收文件描述符 (API 24+)
+                    // 通过反射接收文件描述符 (API 24+)
                     val receivedPfd = try {
-                        pfd.receiveFileDescriptor()
+                        receiveFdMethod.invoke(pfd) as? ParcelFileDescriptor
                     } catch (e: Exception) {
                         Log.w(TAG, "receiveFileDescriptor failed: $e")
                         null
