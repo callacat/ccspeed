@@ -197,49 +197,56 @@ object CcspeedRuntime {
     }
 
     /**
-     * 处理 Go 进程发来的 protectSocket 请求（使用 SCM_RIGHTS 传递文件描述符）。
-     * Go 端通过 unix.Sendmsg 发送 fd，Kotlin 端通过反射调用 LocalSocketImpl.receiveFileDescriptor 接收。
-     */
-    private fun handleProtectSocketRequests(socket: android.net.LocalSocket) {
-        val input = socket.inputStream
-        val output = socket.outputStream
-        // 通过反射获取 LocalSocketImpl 的 receiveFileDescriptor 方法
-        val implClass = Class.forName("android.net.LocalSocketImpl")
-        val receiveFdMethod = implClass.getDeclaredMethod("receiveFileDescriptor")
-        receiveFdMethod.isAccessible = true
-        val getImplField = android.net.LocalSocket::class.java.getDeclaredField("mImpl")
-        getImplField.isAccessible = true
-        val impl = getImplField.get(socket)
+     /** 创建用于与 Go 进程传递文件描述符的 socket pair (API 24+)。 */
+         private fun createProtectSocketPair(): Pair<ParcelFileDescriptor, ParcelFileDescriptor>? {
+             return try {
+                 val pair = ParcelFileDescriptor.createSocketPair()
+                 Log.i(TAG, "protectSocket socket pair created: pfd1=${pair.first.fd}, pfd2=${pair.second.fd}")
+                 Pair(pair.first, pair.second)
+             } catch (e: Exception) {
+                 Log.w(TAG, "createSocketPair failed (API < 24?), falling back to LocalServerSocket: $e")
+                 null
+             }
+         }
 
-        try {
-            val buffer = ByteArray(4)
-            while (true) {
-                // 读取命令字节: 1=PROTECT_FD (后跟 SCM_RIGHTS fd), 0=PING
-                val cmd = input.read()
-                if (cmd == -1) break // EOF
-                if (cmd == 1) { // PROTECT_FD
-                    // 通过反射接收文件描述符
-                    val pfd = receiveFdMethod.invoke(impl) as? ParcelFileDescriptor
-                    val ok = pfd?.let {
-                        try {
-                            protectSocket(pfd.detachFd())
-                        } finally {
-                            runCatching { it.close() }
-                        }
-                    } ?: false
-                    output.write(if (ok) 1 else 0)
-                    output.flush()
-                } else if (cmd == 0) { // PING
-                    output.write(1)
-                    output.flush()
-                }
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "protectSocket IPC ended: $e")
-        } finally {
-            runCatching { socket.close() }
-        }
-    }
+         /** 处理 Go 进程发来的 protectSocket 请求（使用 ParcelFileDescriptor.receiveFileDescriptor，API 24+）。 */
+         private fun handleProtectSocketRequests(pfd: ParcelFileDescriptor) {
+             try {
+                 val input = pfd.fileInputStream
+                 val output = pfd.fileOutputStream
+
+                 while (true) {
+                     // 读取命令字节: 1=PROTECT_FD (后跟 SCM_RIGHTS fd), 0=PING
+                     val cmd = input.read()
+                     if (cmd == -1) break // EOF
+                     if (cmd == 1) { // PROTECT_FD
+                         // 通过 ParcelFileDescriptor.receiveFileDescriptor 接收文件描述符 (API 24+)
+                         val receivedPfd = try {
+                             pfd.receiveFileDescriptor()
+                         } catch (e: Exception) {
+                             Log.w(TAG, "receiveFileDescriptor failed: $e")
+                             null
+                         }
+                         val ok = receivedPfd?.let {
+                             try {
+                                 protectSocket(it.detachFd())
+                             } finally {
+                                 runCatching { it.close() }
+                             }
+                         } ?: false
+                         output.write(if (ok) 1 else 0)
+                         output.flush()
+                     } else if (cmd == 0) { // PING
+                         output.write(1)
+                         output.flush()
+                     }
+                 }
+             } catch (e: Exception) {
+                 Log.w(TAG, "protectSocket IPC ended: $e")
+             } finally {
+                 runCatching { pfd.close() }
+             }
+         }
 
     @Synchronized
     fun stop() {
