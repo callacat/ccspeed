@@ -143,15 +143,9 @@ object CcspeedRuntime {
         val bin = nativeBinary(ctx)
         if (!verifyBinary(bin)) return false
 
-        // 创建抽象命名空间 Unix domain socket 用于 Go -> Kotlin protectSocket IPC
-        // 格式: "ccspeed-protect-<random>"
-        val protectSocketName = "ccspeed-protect-${System.currentTimeMillis()}"
-        val serverSocket = try {
-            android.net.LocalServerSocket(protectSocketName)
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to create protect server socket: $e")
-            null
-        }
+        // 创建 socket pair 用于 Go -> Kotlin protectSocket IPC (API 24+)
+        val protectPair = createProtectSocketPair() ?: return false
+        val (kotlinPfd, goPfd) = protectPair
 
         // 创建并保护 Web 控制台监听套接字
         val webPfd = createProtectedWebSocket(ctx)
@@ -159,7 +153,7 @@ object CcspeedRuntime {
             bin.absolutePath,
             "-listen", LISTEN,
             "-web", "fd://${webPfd?.fd ?: 0}",
-            "-protect-socket", protectSocketName,
+            "-protect-socket", "${goPfd.fd}",
         ).apply {
             // 与壳同 dataDir，ccspeed.json 由 Web 控制台写到这里
             directory(ctx.filesDir)
@@ -170,25 +164,16 @@ object CcspeedRuntime {
             .onFailure { Log.e(TAG, "ProcessBuilder.start failed: $it", it) }
             .getOrNull()
         if (started == null) {
-            runCatching { serverSocket?.close() }
+            runCatching { kotlinPfd.close() }
+            runCatching { goPfd.close() }
             return false
         }
         process = started
         _running.value = true
 
-        // 接受 Go 进程连接并启动 IPC 处理线程
-        serverSocket?.let { ss ->
-            Thread({
-                try {
-                    val clientSocket = ss.accept()
-                    handleProtectSocketRequests(clientSocket)
-                } catch (e: Exception) {
-                    Log.w(TAG, "protectSocket accept failed: $e")
-                } finally {
-                    runCatching { ss.close() }
-                }
-            }, "ccspeed-protect-ipc-accept").apply { isDaemon = true }.start()
-        }
+        // 启动 IPC 处理线程（使用 kotlinPfd 接收 Go 发来的 fd）
+        Thread({ handleProtectSocketRequests(kotlinPfd) }, "ccspeed-protect-ipc")
+            .apply { isDaemon = true }.start()
 
         Thread({ drainLog(started) }, "ccspeed-log").apply { isDaemon = true }.start()
         lastLog = "started alive=${started.isAlive()}"
@@ -196,57 +181,56 @@ object CcspeedRuntime {
         return true
     }
 
-    /**
-     /** 创建用于与 Go 进程传递文件描述符的 socket pair (API 24+)。 */
-         private fun createProtectSocketPair(): Pair<ParcelFileDescriptor, ParcelFileDescriptor>? {
-             return try {
-                 val pair = ParcelFileDescriptor.createSocketPair()
-                 Log.i(TAG, "protectSocket socket pair created: pfd1=${pair.first.fd}, pfd2=${pair.second.fd}")
-                 Pair(pair.first, pair.second)
-             } catch (e: Exception) {
-                 Log.w(TAG, "createSocketPair failed (API < 24?), falling back to LocalServerSocket: $e")
-                 null
-             }
-         }
+    /** 创建用于与 Go 进程传递文件描述符的 socket pair (API 24+)。 */
+    private fun createProtectSocketPair(): Pair<ParcelFileDescriptor, ParcelFileDescriptor>? {
+        return try {
+            val pair = ParcelFileDescriptor.createSocketPair()
+            Log.i(TAG, "protectSocket socket pair created: pfd1=${pair.first.fd}, pfd2=${pair.second.fd}")
+            Pair(pair.first, pair.second)
+        } catch (e: Exception) {
+            Log.w(TAG, "createSocketPair failed (API < 24?), falling back to LocalServerSocket: $e")
+            null
+        }
+    }
 
-         /** 处理 Go 进程发来的 protectSocket 请求（使用 ParcelFileDescriptor.receiveFileDescriptor，API 24+）。 */
-         private fun handleProtectSocketRequests(pfd: ParcelFileDescriptor) {
-             try {
-                 val input = pfd.fileInputStream
-                 val output = pfd.fileOutputStream
+    /** 处理 Go 进程发来的 protectSocket 请求（使用 ParcelFileDescriptor.receiveFileDescriptor，API 24+）。 */
+    private fun handleProtectSocketRequests(pfd: ParcelFileDescriptor) {
+        try {
+            val input = pfd.fileInputStream
+            val output = pfd.fileOutputStream
 
-                 while (true) {
-                     // 读取命令字节: 1=PROTECT_FD (后跟 SCM_RIGHTS fd), 0=PING
-                     val cmd = input.read()
-                     if (cmd == -1) break // EOF
-                     if (cmd == 1) { // PROTECT_FD
-                         // 通过 ParcelFileDescriptor.receiveFileDescriptor 接收文件描述符 (API 24+)
-                         val receivedPfd = try {
-                             pfd.receiveFileDescriptor()
-                         } catch (e: Exception) {
-                             Log.w(TAG, "receiveFileDescriptor failed: $e")
-                             null
-                         }
-                         val ok = receivedPfd?.let {
-                             try {
-                                 protectSocket(it.detachFd())
-                             } finally {
-                                 runCatching { it.close() }
-                             }
-                         } ?: false
-                         output.write(if (ok) 1 else 0)
-                         output.flush()
-                     } else if (cmd == 0) { // PING
-                         output.write(1)
-                         output.flush()
-                     }
-                 }
-             } catch (e: Exception) {
-                 Log.w(TAG, "protectSocket IPC ended: $e")
-             } finally {
-                 runCatching { pfd.close() }
-             }
-         }
+            while (true) {
+                // 读取命令字节: 1=PROTECT_FD (后跟 SCM_RIGHTS fd), 0=PING
+                val cmd = input.read()
+                if (cmd == -1) break // EOF
+                if (cmd == 1) { // PROTECT_FD
+                    // 通过 ParcelFileDescriptor.receiveFileDescriptor 接收文件描述符 (API 24+)
+                    val receivedPfd = try {
+                        pfd.receiveFileDescriptor()
+                    } catch (e: Exception) {
+                        Log.w(TAG, "receiveFileDescriptor failed: $e")
+                        null
+                    }
+                    val ok = receivedPfd?.let {
+                        try {
+                            protectSocket(it.detachFd())
+                        } finally {
+                            runCatching { it.close() }
+                        }
+                    } ?: false
+                    output.write(if (ok) 1 else 0)
+                    output.flush()
+                } else if (cmd == 0) { // PING
+                    output.write(1)
+                    output.flush()
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "protectSocket IPC ended: $e")
+        } finally {
+            runCatching { pfd.close() }
+        }
+    }
 
     @Synchronized
     fun stop() {

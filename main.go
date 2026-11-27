@@ -93,19 +93,28 @@ func main() {
 	quiet := flag.Bool("quiet", true, "hide logs (set -quiet=false to show)")
 	apiAuth := flag.String("api-auth", envOr(os.Getenv("CC_AUTH"), defaultAPIAuth), "Authorization header (or CC_AUTH)")
 	apiComm := flag.String("api-comm", envOr(os.Getenv("CC_COMM"), defaultAPIComm), "comm header (or CC_COMM)")
-	protectSocketFlag := flag.String("protect-socket", "", "abstract namespace socket name for protect socket IPC with Kotlin side (Android only)")
-	showVersion := flag.Bool("version", false, "print version and exit")
+	protectSocketFlag := flag.String("protect-socket", "", "fd number for protect socket IPC with Kotlin side (Android only, passed via socket pair)")
 	flag.Parse()
 
-	protectSocketName = *protectSocketFlag
-	if protectSocketName != "" {
-		// Connect to Kotlin's LocalServerSocket in abstract namespace
-		conn, err := net.Dial("unix", "@"+protectSocketName)
-		if err != nil {
-			log.Printf("failed to connect to protect socket %s: %v", protectSocketName, err)
-		} else {
-			protectConn = conn
-			log.Printf("connected to protect socket %s", protectSocketName)
+		protectSocketFd := 0
+			if *protectSocketFlag != "" {
+				var err error
+				protectSocketFd, err = strconv.Atoi(*protectSocketFlag)
+				if err != nil {
+					log.Printf("invalid protect-socket fd: %v", err)
+				}
+			}
+			if protectSocketFd > 0 {
+			// Create a UnixConn from the fd passed via socket pair
+			f := os.NewFile(uintptr(protectSocketFd), "protect-socket")
+			conn, err := net.FileConn(f)
+			if err != nil {
+				log.Printf("failed to create conn from protect socket fd %d: %v", protectSocketFd, err)
+			} else {
+				protectConn = conn
+				log.Printf("using protect socket fd %d", protectSocketFd)
+			}
+			_ = f.Close()
 		}
 	}
 
