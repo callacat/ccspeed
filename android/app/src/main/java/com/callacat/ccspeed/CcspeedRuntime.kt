@@ -145,7 +145,8 @@ object CcspeedRuntime {
 
         // 创建 socket pair 用于 Go -> Kotlin protectSocket IPC (API 24+)
         val protectPair = createProtectSocketPair() ?: return false
-        val (kotlinPfd, goPfd) = protectPair
+        val kotlinPfd = protectPair[0]
+        val goPfd = protectPair[1]
         Log.i(TAG, "protectSocket socket pair created: pfd1=${kotlinPfd.fd}, pfd2=${goPfd.fd}")
 
         // 创建并保护 Web 控制台监听套接字
@@ -183,7 +184,7 @@ object CcspeedRuntime {
     }
 
     /** 创建用于与 Go 进程传递文件描述符的 socket pair (API 24+)。 */
-    private fun createProtectSocketPair(): Pair<ParcelFileDescriptor, ParcelFileDescriptor>? {
+    private fun createProtectSocketPair(): Array<ParcelFileDescriptor>? {
         return try {
             ParcelFileDescriptor.createSocketPair()
         } catch (e: Exception) {
@@ -205,7 +206,7 @@ object CcspeedRuntime {
                 if (cmd == 1) { // PROTECT_FD
                     // 通过 ParcelFileDescriptor.receiveFileDescriptor 接收文件描述符 (API 24+)
                     val receivedPfd = try {
-                        ParcelFileDescriptor.receiveFileDescriptor(pfd)
+                        pfd.receiveFileDescriptor()
                     } catch (e: Exception) {
                         Log.w(TAG, "receiveFileDescriptor failed: $e")
                         null
