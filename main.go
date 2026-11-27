@@ -96,26 +96,25 @@ func main() {
 	protectSocketFlag := flag.String("protect-socket", "", "fd number for protect socket IPC with Kotlin side (Android only, passed via socket pair)")
 	flag.Parse()
 
-		protectSocketFd := 0
-			if *protectSocketFlag != "" {
-				var err error
-				protectSocketFd, err = strconv.Atoi(*protectSocketFlag)
-				if err != nil {
-					log.Printf("invalid protect-socket fd: %v", err)
-				}
-			}
-			if protectSocketFd > 0 {
-			// Create a UnixConn from the fd passed via socket pair
-			f := os.NewFile(uintptr(protectSocketFd), "protect-socket")
-			conn, err := net.FileConn(f)
-			if err != nil {
-				log.Printf("failed to create conn from protect socket fd %d: %v", protectSocketFd, err)
-			} else {
-				protectConn = conn
-				log.Printf("using protect socket fd %d", protectSocketFd)
-			}
-			_ = f.Close()
+	protectSocketFd := 0
+	if *protectSocketFlag != "" {
+		var err error
+		protectSocketFd, err = strconv.Atoi(*protectSocketFlag)
+		if err != nil {
+			log.Printf("invalid protect-socket fd: %v", err)
 		}
+	}
+	if protectSocketFd > 0 {
+		// Create a UnixConn from the fd passed via socket pair
+		f := os.NewFile(uintptr(protectSocketFd), "protect-socket")
+		conn, err := net.FileConn(f)
+		if err != nil {
+			log.Printf("failed to create conn from protect socket fd %d: %v", protectSocketFd, err)
+		} else {
+			protectConn = conn
+			log.Printf("using protect socket fd %d", protectSocketFd)
+		}
+		_ = f.Close()
 	}
 
 	if *showVersion {
