@@ -146,6 +146,7 @@ object CcspeedRuntime {
         // 创建 socket pair 用于 Go -> Kotlin protectSocket IPC (API 24+)
         val protectPair = createProtectSocketPair() ?: return false
         val (kotlinPfd, goPfd) = protectPair
+        Log.i(TAG, "protectSocket socket pair created: pfd1=${kotlinPfd.fd}, pfd2=${goPfd.fd}")
 
         // 创建并保护 Web 控制台监听套接字
         val webPfd = createProtectedWebSocket(ctx)
@@ -184,9 +185,7 @@ object CcspeedRuntime {
     /** 创建用于与 Go 进程传递文件描述符的 socket pair (API 24+)。 */
     private fun createProtectSocketPair(): Pair<ParcelFileDescriptor, ParcelFileDescriptor>? {
         return try {
-            val pair = ParcelFileDescriptor.createSocketPair()
-            Log.i(TAG, "protectSocket socket pair created: pfd1=${pair.first.fd}, pfd2=${pair.second.fd}")
-            Pair(pair.first, pair.second)
+            ParcelFileDescriptor.createSocketPair()
         } catch (e: Exception) {
             Log.w(TAG, "createSocketPair failed (API < 24?), falling back to LocalServerSocket: $e")
             null
@@ -196,8 +195,8 @@ object CcspeedRuntime {
     /** 处理 Go 进程发来的 protectSocket 请求（使用 ParcelFileDescriptor.receiveFileDescriptor，API 24+）。 */
     private fun handleProtectSocketRequests(pfd: ParcelFileDescriptor) {
         try {
-            val input = pfd.fileInputStream
-            val output = pfd.fileOutputStream
+            val input = ParcelFileDescriptor.AutoCloseInputStream(pfd)
+            val output = ParcelFileDescriptor.AutoCloseOutputStream(pfd)
 
             while (true) {
                 // 读取命令字节: 1=PROTECT_FD (后跟 SCM_RIGHTS fd), 0=PING
@@ -206,14 +205,14 @@ object CcspeedRuntime {
                 if (cmd == 1) { // PROTECT_FD
                     // 通过 ParcelFileDescriptor.receiveFileDescriptor 接收文件描述符 (API 24+)
                     val receivedPfd = try {
-                        pfd.receiveFileDescriptor()
+                        ParcelFileDescriptor.receiveFileDescriptor(pfd)
                     } catch (e: Exception) {
                         Log.w(TAG, "receiveFileDescriptor failed: $e")
                         null
                     }
                     val ok = receivedPfd?.let {
                         try {
-                            protectSocket(it.detachFd())
+                            protectSocket(it.fd)
                         } finally {
                             runCatching { it.close() }
                         }
