@@ -94,6 +94,7 @@ func main() {
 	apiAuth := flag.String("api-auth", envOr(os.Getenv("CC_AUTH"), defaultAPIAuth), "Authorization header (or CC_AUTH)")
 	apiComm := flag.String("api-comm", envOr(os.Getenv("CC_COMM"), defaultAPIComm), "comm header (or CC_COMM)")
 	protectSocketFlag := flag.String("protect-socket", "", "fd number for protect socket IPC with Kotlin side (Android only, passed via socket pair)")
+	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 
 	protectSocketFd := 0
