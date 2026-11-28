@@ -210,6 +210,13 @@ jobs:
             set -e
             chmod +x avd-verify.sh
             bash avd-verify.sh
+      - name: Upload UI screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-screenshots
+          path: android/screenshots
+          retention-days: 7
 
   release:
     needs: [build, android]

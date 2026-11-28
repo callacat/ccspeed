@@ -1,75 +1,89 @@
 package com.callacat.ccspeed
 
-import android.app.Activity
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
-import android.view.ViewGroup
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import android.widget.Button
-import android.widget.LinearLayout
+import androidx.activity.OnBackPressedCallback
+import androidx.appcompat.app.AppCompatActivity
+import com.google.android.material.appbar.MaterialToolbar
 
 /**
- * 内置 WebView 控制台页：点「打开控制台」直接在应用内打开（不跳出 app，体验连续）。
- * 页面顶部提供「在浏览器打开」按钮，保留外部浏览器入口。
- * VPN 生效时，WebView 走 VPN 隧道，回环地址会被路由进隧道导致无法访问本地控制台。
- * 解法：VPN 生效时改用 VPN 接口 IP (10.200.0.2) 访问控制台，控制台监听 0.0.0.0:28981 覆盖该接口。
+ * 内置 WebView 控制台：顶部返回栏避免困在网页里，右上角保留外部浏览器入口。
+ * VPN 生效时回环可能被路由进隧道，按 回环 → VPN 接口 → 模拟器宿主 顺序兜底。
  */
-class ConsoleActivity : Activity() {
+class ConsoleActivity : AppCompatActivity() {
+    private lateinit var web: WebView
+    private var urlIndex = 0
+
+    private val candidates = listOf(
+        "http://127.0.0.1:28981/",
+        "http://10.200.0.2:28981/",
+        "http://10.0.2.2:28981/",
+    )
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-        }
+        setContentView(R.layout.activity_console)
 
-        val openInBrowser = Button(this).apply {
-            text = "在浏览器打开"
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { setMargins(16, 16, 16, 8) }
-            setOnClickListener {
-                val uri = Uri.parse("http://127.0.0.1:28981/")
-                val i = Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                startActivity(i)
+        val toolbar = findViewById<MaterialToolbar>(R.id.toolbar)
+        toolbar.setNavigationOnClickListener { finish() }
+        toolbar.inflateMenu(R.menu.console_menu)
+        toolbar.setOnMenuItemClickListener { item ->
+            if (item.itemId == R.id.action_browser) {
+                openInBrowser(currentUrl())
+                true
+            } else {
+                false
             }
         }
 
-        // VPN 生效时：优先用宿主 adb forward 端口 (10.0.2.2:18981 -> 28981)，
-// 次选 VPN 接口 IP (10.200.0.2:28981)，兜底回环。
-// 注意：需提前 `adb forward tcp:18981 tcp:28981`
-        val consoleUrl = "http://10.0.2.2:18981/"
-
-        val web = WebView(this).apply {
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT
-            ).apply { weight = 1f }
-            settings.javaScriptEnabled = true
-            settings.domStorageEnabled = true
-            settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-            webViewClient = object : WebViewClient() {
-                override fun onReceivedError(view: WebView, request: android.webkit.WebResourceRequest?, error: android.webkit.WebResourceError) {
-                    android.util.Log.e("ConsoleActivity", "WebView error: ${error.description}")
-                    // 备用 1：VPN 接口 IP
-                    if (request?.url?.toString()?.startsWith("http://10.0.2.2:18981/") == true) {
-                        view.loadUrl("http://10.200.0.2:28981/")
-                    }
-                    // 备用 2：模拟器宿主直连（无 adb forward 时）
-                    else if (request?.url?.toString()?.startsWith("http://10.200.0.2:28981/") == true) {
-                        view.loadUrl("http://10.0.2.2:28981/")
-                    }
-                }
-                override fun onReceivedHttpError(view: WebView, request: android.webkit.WebResourceRequest?, errorResponse: android.webkit.WebResourceResponse?) {
-                    android.util.Log.e("ConsoleActivity", "WebView HTTP error: ${errorResponse?.statusCode}")
-                }
-            }
-            loadUrl(consoleUrl)
+        web = findViewById(R.id.webView)
+        web.settings.apply {
+            javaScriptEnabled = true
+            domStorageEnabled = true
+            mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
         }
+        web.webViewClient = object : WebViewClient() {
+            override fun onReceivedError(
+                view: WebView,
+                request: WebResourceRequest?,
+                error: WebResourceError?,
+            ) {
+                if (request?.isForMainFrame != true) return
+                android.util.Log.e("ConsoleActivity", "WebView error: ${error?.description}")
+                loadNextCandidate()
+            }
+        }
+        web.loadUrl(currentUrl())
 
-        root.addView(openInBrowser)
-        root.addView(web)
-        setContentView(root)
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                if (web.canGoBack()) web.goBack() else finish()
+            }
+        })
+    }
+
+    private fun currentUrl(): String = candidates[urlIndex]
+
+    private fun loadNextCandidate() {
+        if (urlIndex + 1 >= candidates.size) return
+        urlIndex += 1
+        web.loadUrl(currentUrl())
+    }
+
+    private fun openInBrowser(url: String) {
+        startActivity(
+            Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+        )
+    }
+
+    override fun onDestroy() {
+        web.destroy()
+        super.onDestroy()
     }
 }
