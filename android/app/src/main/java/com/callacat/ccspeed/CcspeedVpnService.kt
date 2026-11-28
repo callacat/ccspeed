@@ -70,12 +70,14 @@ class CcspeedVpnService : VpnService() {
             .setSession(getString(R.string.app_name))
             .setMtu(1500)
             .addAddress("10.200.0.2", 32)
-            // 0.0.0.0/0 + ::/0 = 全流量进 TUN；DNS 走 hev 的 UDP-in-UDP，
-            // ccspeed 的 udp.go 实测支持 UDP ASSOCIATE。
+            // 0.0.0.0/0 + ::/0 = 全流量进 TUN。
+            // DNS 经 hev 的 UDP ASSOCIATE 到 ccspeed，ccspeed 对 53 端口改走
+            // 节点的 TCP 隧道（节点 UDP 转发不可用，见 udp.go dnsOverTCP）。
+            // 8.8.8.8 在多数节点最快；HK/SG 节点拒它时 ccspeed 自动回退 114。
             .addRoute("0.0.0.0", 0)
             .addRoute("::", 0)
-            .addDnsServer("1.1.1.1")
-            .addDnsServer("223.5.5.5")
+            .addDnsServer("8.8.8.8")
+            .addDnsServer("114.114.114.114")
             .setBlocking(false)
         // 分应用代理：白名单且有效选中集非空 → 只有选中应用进 VPN；否则全量（兼容现状）。
         val mode = PerAppConfig.mode(this)
@@ -98,20 +100,16 @@ class CcspeedVpnService : VpnService() {
                 .onFailure { Log.w(TAG, "addDisallowedApplication failed: $it") }
         }
         // 管理面保活：LAN + Tailscale(CGNAT) 不进 TUN，否则 adb/内网设备失联。
-        // excludeRoute 需要 API 33+；更低版本接受全量（用户可临时关 VPN 管理）。
-        if (Build.VERSION.SDK_INT >= 33) {
-            listOf("192.168.0.0/16", "172.16.0.0/12", "100.64.0.0/10").forEach { cidr ->
-                runCatching {
-                    val (addr, len) = cidr.split("/")
-                    builder.excludeRoute(
-                        android.net.IpPrefix(java.net.InetAddress.getByName(addr), len.toInt()),
-                    )
-                }.onFailure { Log.w(TAG, "excludeRoute $cidr failed: $it") }
-            }
+        // minSdk 33 起 excludeRoute 恒可用（CMP-444 定案：低版本直接放弃）。
+        listOf("192.168.0.0/16", "172.16.0.0/12", "100.64.0.0/10").forEach { cidr ->
+            runCatching {
+                val (addr, len) = cidr.split("/")
+                builder.excludeRoute(
+                    android.net.IpPrefix(java.net.InetAddress.getByName(addr), len.toInt()),
+                )
+            }.onFailure { Log.w(TAG, "excludeRoute $cidr failed: $it") }
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            runCatching { builder.setMetered(false) }
-        }
+        runCatching { builder.setMetered(false) }
         val fd = runCatching { builder.establish() }.getOrNull()
         if (fd == null) {
             Log.e(TAG, "establish() 返回 null——授权被拒或接口冲突（如 Tailscale 等其他 VPN 占用）")

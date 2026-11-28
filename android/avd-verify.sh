@@ -242,6 +242,19 @@ else
     echo "WARN: web console (28981) 未就绪（HTTP ${WEB_CODE:-none}）——仅 WARN"
 fi
 
+# CMP-444：域名解析经隧道（DNS 在 ccspeed 里改走节点 TCP，见 udp.go dnsOverTCP）。
+# 与出口判据同理，AVD 到节点不可达时记 SKIP，不冒充 PASS。
+say "gate: DNS 全链路（域名 → HTTP 状态）"
+HTTP_CODE="$(adb shell "curl -s -m 25 -o /dev/null -w '%{http_code}' https://www.baidu.com" 2>/dev/null | tr -d '\r\n')"
+if [ "$HTTP_CODE" = "200" ]; then
+    echo "DOMAIN_STATUS=PASS:https://www.baidu.com=200"
+else
+    echo "SKIP: 域名探测 got '$HTTP_CODE'（AVD 到 CC 节点不可达时为预期；真机验收必测）"
+fi
+adb shell "am force-stop $PKG" 2>/dev/null || true
+sleep 3
+adb shell "ip -o addr show tun0" | grep -q "tun0" && { echo "FAIL: 停止后 tun0 仍在（CMP-440 回归）"; FAIL_COUNT=$((FAIL_COUNT+1)); } || echo "stop: tun0 已释放 OK"
+
 say "停止释放（信息项，不作硬门）"
 adb shell am stopservice -n "$PKG/.CcspeedVpnService" || true
 sleep 4
