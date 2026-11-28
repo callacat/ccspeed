@@ -5,9 +5,23 @@ set -uo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
 tmp=$(mktemp -d)
-trap 'rm -rf "$tmp"' EXIT
+NODEPID=""
+trap 'kill $NODEPID 2>/dev/null; rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/bin"
 : > "$tmp/fake.apk"
+
+# 一个真实在听的本地端口，用来触发「runner 到节点可达 -> 假通必须 FAIL」分支。
+python3 - "$tmp/node_port" <<'PY' &
+import socket, sys, time
+s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(("127.0.0.1", 0)); s.listen(50)
+open(sys.argv[1], "w").write(str(s.getsockname()[1]))
+while True:
+    time.sleep(60)
+PY
+NODEPID=$!
+for _ in $(seq 1 50); do [ -s "$tmp/node_port" ] && break; sleep 0.1; done
+NODEPORT=$(cat "$tmp/node_port")
 
 cat > "$tmp/bin/adb" <<'STUB'
 #!/usr/bin/env bash
@@ -15,6 +29,7 @@ FIXTURE='<?xml version="1.0"?><hierarchy><node text="启动" bounds="[0,0][100,1
 case "$*" in
   *"uiautomator dump"*) printf '%s' "$FIXTURE" > /tmp/__avd_fixture.xml; exit 0 ;;
   *"pull "*) cp /tmp/__avd_fixture.xml "${@: -1}" 2>/dev/null; exit 0 ;;
+  *"logcat -d"*) [ -n "${FAKE_NODE:-}" ] && echo "node    : $FAKE_NODE"; exit 0 ;;
   *"curl -s -m 20"*) echo "${FAKE_TUNNEL_IP:-}"; exit 0 ;;
   *"command -v curl"*) exit 0 ;;
   *"ip -o addr show tun0"*) [ -n "${FAKE_TUN0:-}" ] && echo "$FAKE_TUN0"; exit 0 ;;
@@ -66,12 +81,13 @@ run_case "全部正常"            0 PASS  "${CORE[@]}" "${NET[@]}" FAKE_TUNNEL_
 run_case "tun0 缺失"           1 FAIL  "${NET[@]}" FAKE_TUN0= FAKE_NATIVE='1 libccspeed.so' FAKE_SOCKS='x:0439' FAKE_TUNNEL_IP='2.2.2.2'
 run_case "native 缺失(只剩壳)"  1 FAIL  "${NET[@]}" FAKE_TUN0='tun0' FAKE_NATIVE= FAKE_SOCKS='x:0439' FAKE_TUNNEL_IP='2.2.2.2'
 run_case "SOCKS5 未监听"       1 FAIL  "${NET[@]}" FAKE_TUN0='tun0' FAKE_NATIVE='1 libccspeed.so' FAKE_SOCKS= FAKE_TUNNEL_IP='2.2.2.2'
-run_case "假通: 隧道取不到 IP"   1 FAIL  "${CORE[@]}" "${NET[@]}" FAKE_TUNNEL_IP=
+run_case "假通: 隧道取不到 IP"   1 FAIL  "${CORE[@]}" "${NET[@]}" FAKE_TUNNEL_IP= FAKE_NODE="127.0.0.1:$NODEPORT"
 run_case "出口与直连相同"       1 FAIL  "${CORE[@]}" "${NET[@]}" FAKE_TUNNEL_IP='1.1.1.1'
 run_case "环境无外网 -> SKIP"   0 SKIP  "${CORE[@]}" FAKE_DIRECT_IP= FAKE_TUNNEL_IP=
+run_case "节点不可达 -> SKIP"   0 SKIP  "${CORE[@]}" "${NET[@]}" FAKE_TUNNEL_IP= FAKE_NODE='127.0.0.1:1'
 
 if [ "$fails" -gt 0 ]; then
     echo "SELFTEST FAIL: $fails 项"
     exit 1
 fi
-echo "SELFTEST PASS: 7/7"
+echo "SELFTEST PASS: 8/8"

@@ -169,20 +169,30 @@ else
         echo "device curl absent -> adb forward tcp:1081 + runner curl --socks5-hostname"
         adb forward tcp:1081 tcp:1081 >/dev/null 2>&1
     fi
-    for i in 1 2 3; do
+    # 节点选路 + 首连可能要几十秒，给 75s 窗口；期间任一时刻取到有效 IP 即过。
+    for i in {1..15}; do
         if [ "$USE_DEVICE_CURL" = "1" ]; then
             TUNNEL_IP=$(adb shell "curl -s -m 20 -x socks5h://127.0.0.1:1081 '$EGRESS_URL'" 2>/dev/null | tr -d '\r\n ')
         else
             TUNNEL_IP=$(curl -s -m 20 --socks5-hostname 127.0.0.1:1081 "$EGRESS_URL" 2>/dev/null | tr -d '\r\n ')
         fi
         is_ip "$TUNNEL_IP" && break
-        echo "socks5 egress attempt $i failed (${TUNNEL_IP:-empty})"
+        echo "socks5 egress attempt $i/15 failed (${TUNNEL_IP:-empty})"
         sleep 5
     done
     [ "$USE_DEVICE_CURL" = "1" ] || adb forward --remove tcp:1081 >/dev/null 2>&1
     echo "经 SOCKS5 出口 IP: ${TUNNEL_IP:-<empty>}"
     if ! is_ip "$TUNNEL_IP"; then
-        fail "经 SOCKS5 取出口 IP 失败（TCP 假通/数据零返回）"
+        # 区分「环境到节点不通」与「App 假通」：runner 与 AVD 同 NAT，
+        # runner TCP 都连不上节点 ⇒ 环境限制，显式 SKIP；能连上但取不到数据 ⇒ 硬失败。
+        NODE_ADDR=$(adb logcat -d 2>/dev/null | grep -oE 'node +: [0-9.]+:[0-9]+' | tail -1 | grep -oE '[0-9.]+:[0-9]+')
+        if [ -n "$NODE_ADDR" ] && ! timeout 6 bash -c "exec 3<>/dev/tcp/${NODE_ADDR%:*}/${NODE_ADDR#*:}" 2>/dev/null; then
+            echo "SKIP: 节点 $NODE_ADDR 从 runner 不可达 —— 环境限制，出口门 SKIP（不计 PASS）"
+            EGRESS_SKIPPED=1
+        else
+            echo "runner 到节点 ${NODE_ADDR:-unknown} 可达（或未解析到节点）"
+            fail "经 SOCKS5 取出口 IP 失败（TCP 假通/数据零返回）"
+        fi
     elif [ "$TUNNEL_IP" = "$DIRECT_IP" ]; then
         fail "经 SOCKS5 的出口 IP 与直连相同（$TUNNEL_IP），未真正经隧道出网"
     else

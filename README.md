@@ -184,9 +184,10 @@ android job 产出 APK（libccspeed.so 从源码重建）→ boot AVD → adb in
 ```
 
 **硬门与状态**：①~③ 任一失败 `exit 1`，CI 直接红；④ 只有在 runner 自身
-无外网时才显式 `RESULT: SKIP`（永不打印 PASS）。`/api/status` 的 node-ip
-是节点地址，不是出口 IP，禁止作为隧道通网的证据。门禁逻辑自测：
-`android/test-avd-verify.sh`（假 adb/curl，7 场景，秒级）。
+无外网、或日志里选中的节点从 runner TCP 不可达时才显式 `RESULT: SKIP`
+（永不打印 PASS）。`/api/status` 的 node-ip 是节点地址，不是出口 IP，
+禁止作为隧道通网的证据。门禁逻辑自测：
+`android/test-avd-verify.sh`（假 adb/curl，8 场景，秒级）。
 
 资产验收判据同步在 CI 里收口：assets 按 ABI 选对（AVD 上跑 amd64）、
 amd64 target 单独进 Release、CC_AUTH/CC_COMM 凭据形状 zero-hit。
