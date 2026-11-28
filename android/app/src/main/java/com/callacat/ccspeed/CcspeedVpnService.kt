@@ -49,6 +49,15 @@ class CcspeedVpnService : VpnService() {
         stopSelf()
     }
 
+    /**
+     * 用户在最近任务里划掉 App 时系统会回调这里。不要 stopSelf——VPN 应继续运行，
+     * 否则一划掉就断网。ColorOS 的 CachedClean 主动清理不经过此回调，只能靠
+     * 电池优化白名单（见 MainActivity）降低概率。
+     */
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        Log.i(TAG, "onTaskRemoved: keep service alive, vpn stays up")
+    }
+
     override fun onDestroy() {
         stopForeground(true)
         teardown()

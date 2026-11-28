@@ -4,8 +4,11 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.net.Uri
 import android.net.VpnService
 import android.os.Bundle
+import android.os.PowerManager
+import android.provider.Settings
 import android.widget.Button
 import android.widget.TextView
 import android.util.Log
@@ -18,7 +21,10 @@ import kotlinx.coroutines.launch
 /** 三按钮壳。所有业务 UI 都在 Web 控制台；这里只做启停 + 打开控制台。 */
 class MainActivity : AppCompatActivity() {
     private lateinit var status: TextView
+    private lateinit var batteryStatus: TextView
     private var wantVpn = false
+    /** 用户点启动后先去加白，返回界面再继续启动 */
+    private var pendingStartAfterWhitelist = false
     private lateinit var toggle: Button
     private val vpnConflictReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -73,9 +79,27 @@ class MainActivity : AppCompatActivity() {
             text = "打开控制台 http://127.0.0.1:28981"
             setOnClickListener { openConsole() }
         }
+        batteryStatus = TextView(this).apply {
+            textSize = 14f
+            setPadding(0, 24, 0, 8)
+        }
+        val keepAlive = Button(this).apply {
+            text = "后台保活设置"
+            setOnClickListener { requestIgnoreBatteryOptimizations() }
+        }
+        val colorOsHint = TextView(this).apply {
+            textSize = 13f
+            setText(
+                "ColorOS 额外设置：设置 → 应用管理 → 本应用 → 耗电管理/允许后台活动 打开；" +
+                    "再在最近任务卡片下拉锁定本应用，防止清理后台时被带走。",
+            )
+        }
         root.addView(status)
         root.addView(toggle)
         root.addView(console)
+        root.addView(keepAlive)
+        root.addView(batteryStatus)
+        root.addView(colorOsHint)
         setContentView(root)
 
         // Observe runtime running state to keep button text in sync
@@ -91,7 +115,70 @@ class MainActivity : AppCompatActivity() {
         try { unregisterReceiver(vpnConflictReceiver) } catch (_: Throwable) {}
     }
 
+    override fun onResume() {
+        super.onResume()
+        refreshBatteryStatus()
+        if (pendingStartAfterWhitelist) {
+            pendingStartAfterWhitelist = false
+            if (!isIgnoringBatteryOptimizations()) {
+                Toast.makeText(this, "未加入电池优化白名单，锁屏后仍可能被系统清理", Toast.LENGTH_LONG).show()
+            }
+            beginStart()
+        }
+    }
+
+    private fun isIgnoringBatteryOptimizations(): Boolean {
+        val pm = getSystemService(PowerManager::class.java) ?: return false
+        return pm.isIgnoringBatteryOptimizations(packageName)
+    }
+
+    private fun refreshBatteryStatus() {
+        batteryStatus.text = if (isIgnoringBatteryOptimizations()) {
+            "后台保活：已加入电池优化白名单"
+        } else {
+            "后台保活：未加白，锁屏/清后台后可能被系统杀掉"
+        }
+    }
+
+    /** 返回 true 表示已拉起系统页面；false 表示无法拉起，调用方自行继续。 */
+    private fun requestIgnoreBatteryOptimizations(): Boolean {
+        if (isIgnoringBatteryOptimizations()) {
+            Toast.makeText(this, "已在电池优化白名单中", Toast.LENGTH_SHORT).show()
+            return false
+        }
+        // 需要 REQUEST_IGNORE_BATTERY_OPTIMIZATIONS 权限；少数 ROM 会拒绝对话框，
+        // 回退到电池优化列表页（无需权限），再不行就提示手动设置。
+        val direct = Intent(
+            Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+            Uri.parse("package:$packageName"),
+        )
+        return try {
+            startActivity(direct)
+            true
+        } catch (e: Exception) {
+            Log.w(TAG, "request ignore battery optimizations failed: $e")
+            runCatching { startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
+                .onFailure {
+                    Toast.makeText(this, "无法打开系统设置，请手动允许本应用后台运行", Toast.LENGTH_LONG).show()
+                }
+                .isSuccess
+        }
+    }
+
     private fun onStartClicked() {
+        if (!isIgnoringBatteryOptimizations()) {
+            // 先引导加白；拉起成功就等 onResume 回来再启动，不把加白当硬门槛
+            pendingStartAfterWhitelist = true
+            if (!requestIgnoreBatteryOptimizations()) {
+                pendingStartAfterWhitelist = false
+                beginStart()
+            }
+            return
+        }
+        beginStart()
+    }
+
+    private fun beginStart() {
         val intent: Intent? = VpnService.prepare(this)
         if (intent != null) {
             wantVpn = true
