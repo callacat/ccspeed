@@ -25,6 +25,7 @@ NODEPORT=$(cat "$tmp/node_port")
 
 cat > "$tmp/bin/adb" <<'STUB'
 #!/usr/bin/env bash
+STATE=${FAKE_STATE:-/tmp/__avd_stopped}
 FIXTURE='<?xml version="1.0"?><hierarchy><node text="启动" bounds="[0,0][100,100]"/><node text="OK" bounds="[0,0][100,100]"/></hierarchy>'
 case "$*" in
   *"uiautomator dump"*) printf '%s' "$FIXTURE" > /tmp/__avd_fixture.xml; exit 0 ;;
@@ -32,8 +33,8 @@ case "$*" in
   *"logcat -d"*) [ -n "${FAKE_NODE:-}" ] && echo "node    : $FAKE_NODE"; exit 0 ;;
   *"curl -s -m 20"*) echo "${FAKE_TUNNEL_IP:-}"; exit 0 ;;
   *"command -v curl"*) exit 0 ;;
-  *"am force-stop"*|*"stopservice"*) touch /tmp/__avd_stopped; exit 0 ;;
-  *"ip -o addr show tun0"*) [ -n "${FAKE_TUN0:-}" ] && [ ! -f /tmp/__avd_stopped ] && echo "$FAKE_TUN0"; exit 0 ;;
+  *"am force-stop"*|*"stopservice"*) touch "$STATE"; exit 0 ;;
+  *"ip -o addr show tun0"*) [ -n "${FAKE_TUN0:-}" ] && [ ! -f "$STATE" ] && echo "$FAKE_TUN0"; exit 0 ;;
   *"ps -A"*) [ -n "${FAKE_NATIVE:-}" ] && echo "$FAKE_NATIVE"; exit 0 ;;
   *":0439 "*) [ -n "${FAKE_SOCKS:-}" ] && echo "$FAKE_SOCKS"; exit 0 ;;
   *) exit 0 ;;
@@ -56,9 +57,9 @@ run_case() {
     local name=$1 want_code=$2 want_result=$3
     shift 3
     local out code
-    rm -f /tmp/__avd_stopped
+    rm -f "$tmp/stopped"
     out=$(cd "$here" && env PATH="$tmp/bin:$PATH" AVD_VERIFY_FAST=1 \
-        APK_PATH_OVERRIDE="$tmp/fake.apk" "$@" \
+        FAKE_STATE="$tmp/stopped" APK_PATH_OVERRIDE="$tmp/fake.apk" "$@" \
         bash "$here/avd-verify.sh" 2>&1)
     code=$?
     if [ "$code" != "$want_code" ]; then

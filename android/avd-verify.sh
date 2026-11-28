@@ -253,7 +253,11 @@ else
 fi
 adb shell "am force-stop $PKG" 2>/dev/null || true
 sleep 3
-adb shell "ip -o addr show tun0" | grep -q "tun0" && { echo "FAIL: 停止后 tun0 仍在（CMP-440 回归）"; FAIL_COUNT=$((FAIL_COUNT+1)); } || echo "stop: tun0 已释放 OK"
+if adb shell "ip -o addr show tun0" 2>/dev/null | grep -q "tun0"; then
+    fail "停止后 tun0 仍在（CMP-440 回归）"
+else
+    echo "stop: tun0 已释放 OK"
+fi
 
 say "停止释放（信息项，不作硬门）"
 adb shell am stopservice -n "$PKG/.CcspeedVpnService" || true
