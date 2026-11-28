@@ -24,7 +24,11 @@ class CcspeedVpnService : VpnService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Log.i(TAG, "onStartCommand enter action=${intent?.action}")
         if (intent?.action == ACTION_STOP) {
-            stopForeground(true)
+            // 停止必须自包含：不能只 stopSelf() 依赖 onDestroy（实测 onDestroy 不保证执行 ->
+            // tun0/hev 残留，系统仍认为 VPN 在跑，表现为"点停止无效、VPN 在但无网"）。
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            teardown()
+            CcspeedRuntime.stop()
             stopSelf()
             return START_NOT_STICKY
         }
@@ -75,8 +79,12 @@ class CcspeedVpnService : VpnService() {
         // excludeRoute 需要 API 33+；更低版本接受全量（用户可临时关 VPN 管理）。
         if (Build.VERSION.SDK_INT >= 33) {
             listOf("192.168.0.0/16", "172.16.0.0/12", "100.64.0.0/10").forEach { cidr ->
-                runCatching { builder.excludeRoute(android.net.IpPrefix(cidr)) }
-                    .onFailure { Log.w(TAG, "excludeRoute $cidr failed: $it") }
+                runCatching {
+                    val (addr, len) = cidr.split("/")
+                    builder.excludeRoute(
+                        android.net.IpPrefix(java.net.InetAddress.getByName(addr), len.toInt()),
+                    )
+                }.onFailure { Log.w(TAG, "excludeRoute $cidr failed: $it") }
             }
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -217,9 +225,14 @@ class CcspeedVpnService : VpnService() {
         }
 
         fun stop(context: android.content.Context) {
-            val i = Intent(context, CcspeedVpnService::class.java).setAction(ACTION_STOP)
-            runCatching { context.startService(i) }
-                .onFailure { context.stopService(Intent(context, CcspeedVpnService::class.java)) }
+            val i = Intent(context, CcspeedVpnService::class.java)
+            // 双路停止：ACTION_STOP 让 service 自包含 teardown；stopService 兜底强制销毁。
+            // 单独依赖任一路都实测不可靠（ACTION_STOP 可能被后台启动限制吞掉，
+            // onDestroy 也可能不执行）。
+            runCatching { context.startService(i.setAction(ACTION_STOP)) }
+                .onFailure { Log.w(TAG, "stop via ACTION_STOP failed: $it") }
+            runCatching { context.stopService(Intent(context, CcspeedVpnService::class.java)) }
+                .onFailure { Log.w(TAG, "stopService failed: $it") }
         }
     }
 }
