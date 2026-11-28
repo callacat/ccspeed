@@ -80,12 +80,15 @@ class CcspeedVpnService : VpnService() {
             runCatching { builder.addAllowedApplication(pkg) }
                 .onFailure { Log.w(TAG, "addAllowedApplication($pkg) failed: $it") }
         }
-        // 关键：本 App（含同 UID 的 ccspeed 子进程）不走 VPN。
-        // 否则 ccspeed dial 节点的出站连接被 tun0 捕获 -> hev -> 127.0.0.1:1081 回环，
-        // 表现为 TCP 建连成功但数据零返回。protect(fd) 那套 IPC 在 API 34 上反射拿不到
-        // receiveFileDescriptor，且跨进程传 fd 远不如这一行可靠。
-        runCatching { builder.addDisallowedApplication(packageName) }
-            .onFailure { Log.w(TAG, "addDisallowedApplication failed: $it") }
+        if (allowed.isEmpty()) {
+            // 全量模式：本 App（含同 UID 的 ccspeed 子进程）不走 VPN。否则 ccspeed dial 节点的
+            // 出站被 tun0 捕获 -> hev -> 127.0.0.1:1081 回环（CMP-439）。
+            // 白名单模式不能也调这个：Builder 禁止与 addAllowedApplication 混用（Android 14 实测抛
+            // UnsupportedOperationException: addAllowedApplication already called）；而自身不在
+            // allowed 列表里本就不进 VPN，天然满足直连条件。
+            runCatching { builder.addDisallowedApplication(packageName) }
+                .onFailure { Log.w(TAG, "addDisallowedApplication failed: $it") }
+        }
         // 管理面保活：LAN + Tailscale(CGNAT) 不进 TUN，否则 adb/内网设备失联。
         // excludeRoute 需要 API 33+；更低版本接受全量（用户可临时关 VPN 管理）。
         if (Build.VERSION.SDK_INT >= 33) {
