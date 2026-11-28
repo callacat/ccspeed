@@ -128,7 +128,7 @@ adb forward tcp:28981 tcp:28981
 echo "port-forward set"
 WEB_OK=0
 for i in {1..10}; do
-    if wget -q -O /tmp/webconsole.html --server-response --timeout=5 http://127.0.0.1:28981/ 2>&1 | grep -E "HTTP|Length" | tail -2; then
+    if wget -q --tries=1 -O /tmp/webconsole.html --server-response --timeout=5 http://127.0.0.1:28981/ 2>&1 | grep -E "HTTP|Length" | tail -2; then
         echo "web console responded OK"
         head -c 200 /tmp/webconsole.html 2>/dev/null; echo
         WEB_OK=1
