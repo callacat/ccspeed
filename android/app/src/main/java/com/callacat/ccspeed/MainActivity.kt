@@ -18,6 +18,7 @@ import kotlinx.coroutines.launch
 /** 三按钮壳。所有业务 UI 都在 Web 控制台；这里只做启停 + 打开控制台。 */
 class MainActivity : AppCompatActivity() {
     private lateinit var status: TextView
+    private lateinit var modeSummary: TextView
     private var wantVpn = false
     private lateinit var toggle: Button
     private val vpnConflictReceiver = object : BroadcastReceiver() {
@@ -73,8 +74,20 @@ class MainActivity : AppCompatActivity() {
             text = "打开控制台 http://127.0.0.1:28981"
             setOnClickListener { openConsole() }
         }
+        modeSummary = TextView(this).apply {
+            textSize = 14f
+            setPadding(0, 0, 0, 16)
+        }
+        val perApp = Button(this).apply {
+            text = "分应用代理"
+            setOnClickListener {
+                startActivity(Intent(this@MainActivity, PerAppProxyActivity::class.java))
+            }
+        }
         root.addView(status)
+        root.addView(modeSummary)
         root.addView(toggle)
+        root.addView(perApp)
         root.addView(console)
         setContentView(root)
 
@@ -84,6 +97,12 @@ class MainActivity : AppCompatActivity() {
                 toggle.text = if (running) "停止" else "启动"
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // 从分应用选择页返回时刷新摘要（全量 / 仅 N 个应用）
+        modeSummary.text = PerAppConfig.summary(this)
     }
 
     override fun onDestroy() {
