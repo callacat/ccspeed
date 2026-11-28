@@ -77,12 +77,26 @@ class CcspeedVpnService : VpnService() {
             .addDnsServer("1.1.1.1")
             .addDnsServer("223.5.5.5")
             .setBlocking(false)
-        // 关键：本 App（含同 UID 的 ccspeed 子进程）不走 VPN。
-        // 否则 ccspeed dial 节点的出站连接被 tun0 捕获 -> hev -> 127.0.0.1:1081 回环，
-        // 表现为 TCP 建连成功但数据零返回。protect(fd) 那套 IPC 在 API 34 上反射拿不到
-        // receiveFileDescriptor，且跨进程传 fd 远不如这一行可靠。
-        runCatching { builder.addDisallowedApplication(packageName) }
-            .onFailure { Log.w(TAG, "addDisallowedApplication failed: $it") }
+        // 分应用代理：白名单且有效选中集非空 → 只有选中应用进 VPN；否则全量（兼容现状）。
+        val mode = PerAppConfig.mode(this)
+        val allowed = if (PerAppConfig.whitelistActive(this)) PerAppConfig.effectiveSelected(this) else emptySet()
+        Log.i(TAG, "route mode=$mode allowed=${allowed.size} [${allowed.joinToString(",")}]")
+        if (mode == PerAppConfig.MODE_WHITELIST && allowed.isEmpty()) {
+            Log.i(TAG, "whitelist selected but effective empty (0 apps) -> fallback to full")
+        }
+        allowed.forEach { pkg ->
+            runCatching { builder.addAllowedApplication(pkg) }
+                .onFailure { Log.w(TAG, "addAllowedApplication($pkg) failed: $it") }
+        }
+        if (allowed.isEmpty()) {
+            // 全量模式：本 App（含同 UID 的 ccspeed 子进程）不走 VPN。否则 ccspeed dial 节点的
+            // 出站被 tun0 捕获 -> hev -> 127.0.0.1:1081 回环（CMP-439）。
+            // 白名单模式不能也调这个：Builder 禁止与 addAllowedApplication 混用（Android 14 实测抛
+            // UnsupportedOperationException: addAllowedApplication already called）；而自身不在
+            // allowed 列表里本就不进 VPN，天然满足直连条件。
+            runCatching { builder.addDisallowedApplication(packageName) }
+                .onFailure { Log.w(TAG, "addDisallowedApplication failed: $it") }
+        }
         // 管理面保活：LAN + Tailscale(CGNAT) 不进 TUN，否则 adb/内网设备失联。
         // excludeRoute 需要 API 33+；更低版本接受全量（用户可临时关 VPN 管理）。
         if (Build.VERSION.SDK_INT >= 33) {
@@ -107,6 +121,7 @@ class CcspeedVpnService : VpnService() {
             return
         }
         tun = fd
+        isRunning = true
         Log.i(TAG, "tun up fd=${fd.fd}")
 
         val yml = writeHevConfig()
@@ -164,6 +179,7 @@ class CcspeedVpnService : VpnService() {
         runCatching { TProxyService.TProxyStopService() }
         runCatching { tun?.close() }
         tun = null
+        isRunning = false
     }
 
     private fun startForegroundNotify() {
@@ -222,6 +238,11 @@ class CcspeedVpnService : VpnService() {
         private const val ACTION_STOP = "com.callacat.ccspeed.action.STOP"
         /** 广播 action：VPN 接口被其他应用（如 Tailscale）占用 */
         const val ACTION_VPN_CONFLICT = "com.callacat.ccspeed.action.VPN_CONFLICT"
+
+        /** tun0 是否已建立；选择页据此判断要不要重启 VPN */
+        @Volatile
+        var isRunning = false
+            private set
 
         fun start(context: android.content.Context) {
             val i = Intent(context, CcspeedVpnService::class.java)

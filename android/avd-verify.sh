@@ -139,6 +139,19 @@ adb logcat -d | grep -iE "ccspeed|VpnService|libccspeed|nativeLibraryDir|Permiss
 echo "--- drain ccspeed stdout (任务 banner / relay) ---"
 adb logcat -d | grep -E "ccspeed-linux|web console|listen=|relay |selected fastest|nodes loaded" | tail -30
 
+say "分应用路由判据（默认全量必须打印 route mode=full allowed=0）"
+ROUTE_LOG="$(adb logcat -d | grep -E 'ccspeed-vpn.*route mode=' | tail -5)"
+if echo "$ROUTE_LOG" | grep -q .; then
+    echo "$ROUTE_LOG"
+    if echo "$ROUTE_LOG" | grep -q "route mode=full allowed=0"; then
+        echo "OK: 默认全量路由（白名单未开启，无回归）"
+    else
+        echo "WARN: 默认模式不是 full/0，请确认 shared_prefs/perapp.xml"
+    fi
+else
+    echo "WARN: 未见 route mode 日志（旧版 APK 或 VPN 未起）"
+fi
+
 say "核心硬门：tun0 / native 进程 / SOCKS5 127.0.0.1:1081（最多等待 60s 启动）"
 TUN0=""; NATIVE=""; SOCKS=""
 for i in {1..30}; do

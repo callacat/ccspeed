@@ -76,6 +76,9 @@ class MainActivity : AppCompatActivity() {
         findViewById<MaterialButton>(R.id.consoleButton).setOnClickListener {
             startActivity(Intent(this, ConsoleActivity::class.java))
         }
+        findViewById<MaterialButton>(R.id.appsButton).setOnClickListener {
+            startActivity(Intent(this, PerAppProxyActivity::class.java))
+        }
 
         showCrashLogIfAny()
         registerReceiver(
