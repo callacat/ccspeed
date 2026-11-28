@@ -175,19 +175,39 @@ apps ──> TUN (VpnService) ──> hev-socks5-tunnel (libhev-socks5-tunnel.so
 （GitHub ubuntu runner 自带 KVM 硬件加速），链路：
 
 ```text
-gradle assembleDebug → boot AVD → adb install → 启动
+android job 产出 APK（libccspeed.so 从源码重建）→ boot AVD → adb install → 启动
   → uiautomator dump + input tap 触发 VpnService 授权链
   → adb logcat 抓壳的 ABI banner 与 ccspeed 的 web console banner
-  → 验 SOCKS5 127.0.0.1:1081、控制台 127.0.0.1:28981、tun0 接管
-  → curl 经壳出拿出口 IP → 停止 → 进程/tun 释放 → APK 零凭据复核
+  → 硬门①tun0 接管 ②native 进程存活（libccspeed.so）③SOCKS5 127.0.0.1:1081 监听
+  → 硬门④经 SOCKS5 从外部服务取真实出口 IP，且 ≠ 直连出口
+  → 停止 → 进程/tun 释放 → APK 零凭据复核
 ```
+
+**硬门与状态**：①~③ 任一失败 `exit 1`，CI 直接红；④ 只有在 runner 自身
+无外网、或日志里选中的节点从 runner TCP 不可达时才显式 `RESULT: SKIP`
+（永不打印 PASS）。`/api/status` 的 node-ip 是节点地址，不是出口 IP，
+禁止作为隧道通网的证据。门禁逻辑自测：
+`android/test-avd-verify.sh`（假 adb/curl，8 场景，秒级）。
 
 资产验收判据同步在 CI 里收口：assets 按 ABI 选对（AVD 上跑 amd64）、
 amd64 target 单独进 Release、CC_AUTH/CC_COMM 凭据形状 zero-hit。
 
+**验收证据模板（每条判据贴原始命令输出）**
+
+```text
+A1 装机   : adb install -r app-debug.apk -> Success
+A2 启动   : adb logcat -d -s ccspeed-runtime -> native binary verified / listen=127.0.0.1:1081
+A3 控制台 : curl -s -m 5 -w '%{http_code}' http://127.0.0.1:28981/ -> 200
+A4 出口   : 直连基线(外部服务)=<IP-A>；经 SOCKS5(外部服务)=<IP-B>；IP-B 有效且 ≠ IP-A
+            出口 IP 来源：外部服务（ifconfig.me/ip）/ 非 node-ip
+            node-ip(/api/status)=<IP-N> 仅作配置值，不作出口证据
+A5 停止   : adb shell ip -o addr show tun0 -> 空；ps -A | grep libccspeed.so -> 空
+A6 凭据   : APK credential-shape hits = 0
+```
+
 **真机回归项（收口后 backlog 单列）**：NAT 类型、长时保活、真 4G/5G 网络
-下的 CC API——模拟器只能证明「壳 + 转译链 + 控制台 + TUN 接管」三件事成立，
-不代表真机三项 PASS。
+下的 CC API——模拟器只能证明「壳 + 转译链 + 控制台 + TUN 接管 + 真实出口」
+成立，不代表真机三项 PASS。
 
 ### 本地构建
 
