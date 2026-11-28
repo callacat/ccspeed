@@ -4,29 +4,51 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.res.ColorStateList
+import android.net.Uri
 import android.net.VpnService
 import android.os.Bundle
-import android.widget.Button
-import android.widget.TextView
+import android.os.PowerManager
+import android.provider.Settings
 import android.util.Log
+import android.widget.TextView
 import android.widget.Toast
-import androidx.annotation.Nullable
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
+import com.google.android.material.button.MaterialButton
+import com.google.android.material.color.MaterialColors
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
 
-/** 三按钮壳。所有业务 UI 都在 Web 控制台；这里只做启停 + 打开控制台。 */
+/**
+ * 主界面：连接/断开 + 节点状态 + 控制台入口。
+ * 业务 UI 仍在 Web 控制台，这里只展示运行状态并提供入口。
+ */
 class MainActivity : AppCompatActivity() {
-    private lateinit var status: TextView
+    private lateinit var statusTitle: TextView
+    private lateinit var statusDetail: TextView
+    private lateinit var toggleButton: MaterialButton
+    private lateinit var crashText: TextView
+
     private var wantVpn = false
-    private lateinit var toggle: Button
+    private var statusJob: Job? = null
+
     private val vpnConflictReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == CcspeedVpnService.ACTION_VPN_CONFLICT) {
                 runOnUiThread {
-                    status.text = "VPN 冲突：其他 VPN（如 Tailscale）占用中，请关闭后重试"
                     wantVpn = false
-                    Toast.makeText(this@MainActivity, "VPN 接口被其他应用占用，请关闭其他 VPN 后重试", Toast.LENGTH_LONG).show()
+                    renderToggle()
+                    statusTitle.text = getString(R.string.main_status_disconnected)
+                    statusDetail.text = getString(R.string.vpn_conflict)
+                    Toast.makeText(this@MainActivity, R.string.vpn_conflict, Toast.LENGTH_LONG).show()
                 }
             }
         }
@@ -34,72 +56,149 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // 全局未捕获异常处理器：写 crash.log 供下次启动展示
         Thread.setDefaultUncaughtExceptionHandler { _, throwable ->
             try {
-                val crashFile = CcspeedRuntime.crashLogFile
-                crashFile.writeText(throwable.stackTrace.joinToString("\n") { it.toString() })
+                CcspeedRuntime.crashLogFile.writeText(throwable.stackTrace.joinToString("\n") { it.toString() })
             } catch (_: Throwable) {}
         }
-        registerReceiver(vpnConflictReceiver, IntentFilter(CcspeedVpnService.ACTION_VPN_CONFLICT), Context.RECEIVER_NOT_EXPORTED)
-        // 读取上次崩溃日志（若有）显示在状态区，避免闪退无感知
-        var initStatus = "未启动 " + BuildConfig.VERSION_NAME
+        setContentView(R.layout.activity_main)
+
+        statusTitle = findViewById(R.id.statusTitle)
+        statusDetail = findViewById(R.id.statusDetail)
+        toggleButton = findViewById(R.id.toggleButton)
+        crashText = findViewById(R.id.crashText)
+        findViewById<TextView>(R.id.versionText).text =
+            getString(R.string.main_version, BuildConfig.VERSION_NAME)
+
+        toggleButton.setOnClickListener {
+            if (wantVpn || CcspeedRuntime.runningFlow.value) onStopClicked() else onStartClicked()
+        }
+        findViewById<MaterialButton>(R.id.consoleButton).setOnClickListener {
+            startActivity(Intent(this, ConsoleActivity::class.java))
+        }
+        findViewById<MaterialButton>(R.id.appsButton).setOnClickListener {
+            startActivity(Intent(this, PerAppProxyActivity::class.java))
+        }
+
+        showCrashLogIfAny()
+        registerReceiver(
+            vpnConflictReceiver,
+            IntentFilter(CcspeedVpnService.ACTION_VPN_CONFLICT),
+            Context.RECEIVER_NOT_EXPORTED,
+        )
+
+        lifecycleScope.launch {
+            CcspeedRuntime.runningFlow.collect { renderRunning(it) }
+        }
+    }
+
+    private fun showCrashLogIfAny() {
         try {
             val crashFile = CcspeedRuntime.crashLogFile
-            if (crashFile.exists()) {
-                val lines = crashFile.readText().trim().split("\n")
-                if (lines.isNotEmpty()) {
-                    val preview = lines.take(2).joinToString(" | ")
-                    initStatus = "上次崩溃: $preview"
-                    Log.w(TAG, "crash log found: $preview")
-                }
+            if (!crashFile.exists()) return
+            val preview = crashFile.readText().trim().split("\n").take(2).joinToString(" | ")
+            if (preview.isNotEmpty()) {
+                crashText.text = getString(R.string.main_crash, preview)
+                crashText.visibility = TextView.VISIBLE
+                Log.w(TAG, "crash log found: $preview")
             }
         } catch (_: Throwable) {}
-        val root = android.widget.LinearLayout(this).apply {
-            orientation = android.widget.LinearLayout.VERTICAL
-            setPadding(36, 48, 36, 48)
-        }
-        status = TextView(this).apply {
-            text = initStatus
-            textSize = 16f
-            setPadding(0, 0, 0, 24)
-        }
-        val toggle = Button(this).apply {
-            text = "启动"
-            setOnClickListener { if (wantVpn) onStopClicked() else onStartClicked() }
-        }
-        this.toggle = toggle
-        val console = Button(this).apply {
-            text = "打开控制台 http://127.0.0.1:28981"
-            setOnClickListener { openConsole() }
-        }
-        root.addView(status)
-        root.addView(toggle)
-        root.addView(console)
-        setContentView(root)
+    }
 
-        // Observe runtime running state to keep button text in sync
-        lifecycleScope.launch {
-            CcspeedRuntime.runningFlow.collect { running ->
-                toggle.text = if (running) "停止" else "启动"
+    /** 按钮跟随「意图或实际运行」：授权弹窗/启动失败时也能点断开收尾。 */
+    private fun renderToggle() {
+        val active = wantVpn || CcspeedRuntime.runningFlow.value
+        toggleButton.text =
+            getString(if (active) R.string.main_btn_disconnect else R.string.main_btn_connect)
+        val bgAttr =
+            if (active) com.google.android.material.R.attr.colorError
+            else com.google.android.material.R.attr.colorPrimary
+        val fgAttr =
+            if (active) com.google.android.material.R.attr.colorOnError
+            else com.google.android.material.R.attr.colorOnPrimary
+        toggleButton.backgroundTintList =
+            ColorStateList.valueOf(MaterialColors.getColor(toggleButton, bgAttr))
+        toggleButton.setTextColor(MaterialColors.getColor(toggleButton, fgAttr))
+    }
+
+    private fun renderRunning(running: Boolean) {
+        renderToggle()
+        statusTitle.text =
+            getString(if (running) R.string.main_status_connected else R.string.main_status_disconnected)
+        statusTitle.setTextColor(
+            MaterialColors.getColor(
+                statusTitle,
+                if (running) com.google.android.material.R.attr.colorPrimary
+                else com.google.android.material.R.attr.colorOnSurface,
+            ),
+        )
+
+        if (!running) {
+            statusDetail.text = getString(R.string.main_status_idle_hint)
+            statusJob?.cancel()
+            statusJob = null
+            return
+        }
+        statusDetail.text = getString(R.string.main_status_connecting)
+        startStatusPolling()
+    }
+
+    /** 轮询本机 Web 控制台 /api/status，展示当前节点、地区与延迟。 */
+    private fun startStatusPolling() {
+        if (statusJob?.isActive == true) return
+        statusJob = lifecycleScope.launch {
+            while (isActive) {
+                val info = withContext(Dispatchers.IO) { runCatching { fetchNodeStatus() }.getOrNull() }
+                if (!CcspeedRuntime.runningFlow.value) break
+                statusDetail.text = when {
+                    info == null -> getString(R.string.main_status_no_info)
+                    info.name.isBlank() -> getString(R.string.main_status_picking)
+                    else -> getString(
+                        R.string.main_status_detail,
+                        info.name,
+                        info.group,
+                        info.latencyMs,
+                    )
+                }
+                delay(5000)
             }
         }
     }
 
+    private fun fetchNodeStatus(): NodeStatus? {
+        val conn = (URL("http://127.0.0.1:28981/api/status").openConnection() as HttpURLConnection).apply {
+            connectTimeout = 800
+            readTimeout = 1500
+        }
+        return try {
+            val body = conn.inputStream.bufferedReader().use { it.readText() }
+            val json = JSONObject(body)
+            NodeStatus(
+                name = json.optString("node_name"),
+                group = json.optString("node_group"),
+                latencyMs = json.optInt("latency_ms"),
+            )
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    private data class NodeStatus(val name: String, val group: String, val latencyMs: Int)
+
     override fun onDestroy() {
         super.onDestroy()
+        statusJob?.cancel()
         try { unregisterReceiver(vpnConflictReceiver) } catch (_: Throwable) {}
     }
 
     private fun onStartClicked() {
         val intent: Intent? = VpnService.prepare(this)
+        wantVpn = true
+        renderToggle()
         if (intent != null) {
-            wantVpn = true
             startActivityForResult(intent, REQ_VPN)
         } else {
-            wantVpn = true
             startVpn()
-            toggle.text = "停止"
         }
     }
 
@@ -107,8 +206,7 @@ class MainActivity : AppCompatActivity() {
         wantVpn = false
         CcspeedVpnService.stop(this)
         CcspeedRuntime.stop()
-        status.text = "已停止"
-        toggle.text = "启动"
+        renderToggle()
         Log.i(TAG, "user stopped")
     }
 
@@ -119,7 +217,8 @@ class MainActivity : AppCompatActivity() {
                 startVpn()
             } else {
                 wantVpn = false
-                status.text = "VpnService 授权被拒"
+                renderToggle()
+                statusDetail.text = getString(R.string.vpn_auth_denied)
             }
         }
         super.onActivityResult(requestCode, resultCode, data)
@@ -127,21 +226,27 @@ class MainActivity : AppCompatActivity() {
 
     private fun startVpn() {
         CcspeedVpnService.start(this)
-        val shellVer = BuildConfig.VERSION_NAME
-        val coreVer = CcspeedRuntime.coreVersion(this)
-        // 去重：BuildConfig.VERSION_NAME 已含 v 前缀，coreVersion 也带 v，取其一即可
-        val displayShell = if (shellVer.startsWith("v")) shellVer else "v$shellVer"
-        val displayCore = if (coreVer.startsWith("v")) coreVer else "v$coreVer"
-        // 显示用 127.0.0.1（浏览器访问），实际绑定 0.0.0.0（VPN 路由下仍可达）
-        status.text = "壳 $displayShell · 核心 $displayCore · 控制台 http://127.0.0.1:28981/"
+        // 放在 VPN 拉起之后：先走完 VpnService 授权弹窗，再引导电池白名单，避免两层对话框叠加。
+        if (!isIgnoringBatteryOptimizations()) {
+            Log.i(TAG, "not whitelisted, prompting battery optimization whitelist")
+            requestIgnoreBatteryOptimizations()
+        }
     }
 
-    private fun openConsole() {
-        // 始终使用内置 WebView，避免外部浏览器跨网络命名空间访问不了
-        startActivity(
-            Intent(this, ConsoleActivity::class.java)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-        )
+    /** ColorOS 等 ROM 会清理后台 service 导致 VPN 中断，引导用户加白。 */
+    private fun isIgnoringBatteryOptimizations(): Boolean = runCatching {
+        getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName)
+    }.getOrDefault(true)
+
+    private fun requestIgnoreBatteryOptimizations() {
+        runCatching {
+            startActivity(
+                Intent(
+                    Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                    Uri.parse("package:$packageName"),
+                ),
+            )
+        }.onFailure { Log.w(TAG, "battery exemption request failed: $it") }
     }
 
     companion object {
