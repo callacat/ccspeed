@@ -143,25 +143,26 @@ jobs:
         run: sha256sum app/build/outputs/apk/debug/app-debug.apk
       - name: Verify signing + versionCode
         working-directory: android
-        env:
-          # 入库 debug keystore (android/keystore/ccspeed-debug.jks) 证书指纹；
-          # 断言每次 CI 签名一致，杜绝回退到 AGP 随机 debug keystore。
-          EXPECTED_CERT_SHA256: A3157B644F25628B12DB1EA6E83D26B6FF3096FCD4D246FCFE878E30DAF31F42
         run: |
           set -e
           APK=app/build/outputs/apk/debug/app-debug.apk
           SDK="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
           BT=$(ls -d "$SDK"/build-tools/* | sort -V | tail -1)
           "$BT/apksigner" verify --print-certs "$APK"
+          # APK 实际签名证书指纹（v1 为 "Signer #1"、v2 为 "V2 Signer"，统一按后缀取）
           GOT=$("$BT/apksigner" verify --print-certs "$APK" \
-            | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' \
+            | sed -n 's/.*certificate SHA-256 digest: //p' | head -1 \
             | tr -d ':' | tr '[:lower:]' '[:upper:]')
-          echo "apk cert SHA-256 : $GOT"
-          echo "expected (fixed) : $EXPECTED_CERT_SHA256"
-          [ "$GOT" = "$EXPECTED_CERT_SHA256" ] || { echo "FATAL: APK 未用固定 debug keystore 签名，跨次构建将 cannot-update"; exit 1; }
+          # 入库固定 debug keystore 的证书指纹，断言二者一致 -> 跨次构建签名稳定
+          EXPECTED=$(keytool -list -v -keystore keystore/ccspeed-debug.jks -storepass android \
+            | sed -n 's/.*SHA256: //p' | head -1 \
+            | tr -d ':' | tr '[:lower:]' '[:upper:]')
+          echo "apk cert SHA-256     : $GOT"
+          echo "keystore cert SHA-256: $EXPECTED"
+          [ -n "$GOT" ] && [ "$GOT" = "$EXPECTED" ] || { echo "FATAL: APK 签名与入库 debug keystore 不一致（跨次构建将 cannot-update）"; exit 1; }
           "$BT/aapt" dump badging "$APK" | grep -E '^package:'
           VC=$("$BT/aapt" dump badging "$APK" | sed -n "s/^package:.*versionCode='\([0-9]*\)'.*/\1/p")
-          echo "apk versionCode  : $VC"
+          echo "apk versionCode      : $VC"
           [ -n "$VC" ] && [ "$VC" -gt 1 ] || { echo "FATAL: versionCode 未由 CI 注入 (got '$VC')"; exit 1; }
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
