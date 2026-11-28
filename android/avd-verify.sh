@@ -105,15 +105,15 @@ capture_main no main-light
 capture_main yes main-dark
 set_night no
 
-say "tap 启动 -> VpnService.prepare 弹窗（uiautomator 起不来时退回 wakeup + 屏幕中心 tap）"
-if ! tap_via_uiautomator ui.xml "启动" "Start"; then
+say "tap 连接/启动 -> VpnService.prepare 弹窗（uiautomator 起不来时退回 wakeup + 屏幕中心 tap）"
+if ! tap_via_uiautomator ui.xml "连接" "启动" "Connect" "Start"; then
     echo "WARN: uiautomator 首次未命中，用中心坐标兜底"
     SIZE=$(adb shell wm size | head -1 | awk '{print $NF}')
     echo "wm size=$SIZE"
     adb shell input keyevent KEYCODE_WAKEUP
     W=$(echo "${SIZE%%x*}")
     H=$(echo "${SIZE##*x}")
-    adb shell input tap $((W/2)) $((H/3))
+    adb shell input tap $((W/2)) $((H/2))
 fi
 sleep 2
 
