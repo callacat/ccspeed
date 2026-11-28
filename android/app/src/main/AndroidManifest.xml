@@ -15,7 +15,7 @@
         android:supportsRtl="true"
         android:icon="@drawable/ic_vpn_key"
         android:roundIcon="@drawable/ic_vpn_key"
-        android:theme="@style/Theme.AppCompat.Light.NoActionBar"
+        android:theme="@style/Theme.Ccspeed"
         android:usesCleartextTraffic="true"
         android:networkSecurityConfig="@xml/network_security_config">
 

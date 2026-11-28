@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="brand_primary">#A8C7FA</color>
+    <color name="brand_on_primary">#062E6F</color>
+    <color name="brand_primary_container">#0842A0</color>
+    <color name="brand_on_primary_container">#D3E3FD</color>
+</resources>

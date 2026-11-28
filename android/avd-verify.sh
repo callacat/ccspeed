@@ -34,6 +34,22 @@ PY
 
 say() { echo "=== $* ==="; }
 
+# CMP-446 UI 验收：控制台打开/返回 + 深/浅色主界面截图（产物随 CI artifact 上传）。
+SHOTS="$(cd "$(dirname "$0")" && pwd)/screenshots"
+mkdir -p "$SHOTS"
+
+set_night() { adb shell cmd uimode night "$1" >/dev/null 2>&1 || true; }
+
+capture_main() {
+    local mode="$1" name="$2"
+    set_night "$mode"
+    adb shell am force-stop "$PKG" >/dev/null 2>&1
+    adb shell am start -W -n "$PKG/.MainActivity" >/dev/null 2>&1
+    sleep 3
+    adb exec-out screencap -p > "$SHOTS/$name.png"
+    echo "screenshot: $SHOTS/$name.png ($(stat -c%s "$SHOTS/$name.png" 2>/dev/null || echo 0) bytes)"
+}
+
 say "adb devices"
 adb devices
 
@@ -51,8 +67,13 @@ say "launch MainActivity"
 adb shell am start -W -n "$PKG/.MainActivity"
 sleep 5
 
+say "CMP-446 主界面截图（浅色 + 深色）"
+capture_main no main-light
+capture_main yes main-dark
+set_night no
+
 say "tap 启动 -> VpnService.prepare 弹窗（uiautomator 起不来时退回 wakeup + 屏幕中心 tap）"
-if ! tap_via_uiautomator ui.xml "启动" "Start"; then
+if ! tap_via_uiautomator ui.xml "连接" "启动" "Connect" "Start"; then
     echo "WARN: uiautomator 首次未命中，用中心坐标兜底"
     SIZE=$(adb shell wm size | head -1 | awk '{print $NF}')
     echo "wm size=$SIZE"
@@ -178,6 +199,22 @@ else
 fi
 else
     echo "WARN: 无法获取已安装 APK 路径"
+fi
+
+say "CMP-446 控制台打开 / 返回"
+adb shell am start -W -n "$PKG/.MainActivity" >/dev/null 2>&1
+sleep 2
+if tap_via_uiautomator ui_console.xml "控制台"; then
+    sleep 3
+    adb exec-out screencap -p > "$SHOTS/console.png"
+    echo "screenshot: $SHOTS/console.png"
+    adb shell input keyevent KEYCODE_BACK
+    sleep 1
+    adb shell dumpsys activity activities | grep -q "mResumedActivity.*MainActivity" \
+        && echo "console back -> MainActivity OK" \
+        || echo "WARN: 返回后未见 MainActivity"
+else
+    echo "WARN: 未找到控制台入口"
 fi
 
 echo "gate 完成"
