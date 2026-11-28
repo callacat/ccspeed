@@ -24,8 +24,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var modeSummary: TextView
     private lateinit var batteryStatus: TextView
     private var wantVpn = false
-    /** 用户点启动后先去加白，返回界面再继续启动 */
-    private var pendingStartAfterWhitelist = false
     private lateinit var toggle: Button
     private val vpnConflictReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -128,13 +126,6 @@ class MainActivity : AppCompatActivity() {
         // 从分应用选择页返回时刷新摘要（全量 / 仅 N 个应用）
         modeSummary.text = PerAppConfig.summary(this)
         refreshBatteryStatus()
-        if (pendingStartAfterWhitelist) {
-            pendingStartAfterWhitelist = false
-            if (!isIgnoringBatteryOptimizations()) {
-                Toast.makeText(this, "未加入电池优化白名单，锁屏后仍可能被系统清理", Toast.LENGTH_LONG).show()
-            }
-            beginStart()
-        }
     }
 
     override fun onDestroy() {
@@ -155,11 +146,10 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** 返回 true 表示已拉起系统页面；false 表示无法拉起，调用方自行继续。 */
-    private fun requestIgnoreBatteryOptimizations(): Boolean {
+    private fun requestIgnoreBatteryOptimizations() {
         if (isIgnoringBatteryOptimizations()) {
             Toast.makeText(this, "已在电池优化白名单中", Toast.LENGTH_SHORT).show()
-            return false
+            return
         }
         // 需要 REQUEST_IGNORE_BATTERY_OPTIMIZATIONS 权限；少数 ROM 会拒绝对话框，
         // 回退到电池优化列表页（无需权限），再不行就提示手动设置。
@@ -167,33 +157,18 @@ class MainActivity : AppCompatActivity() {
             Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
             Uri.parse("package:$packageName"),
         )
-        return try {
+        try {
             startActivity(direct)
-            true
         } catch (e: Exception) {
             Log.w(TAG, "request ignore battery optimizations failed: $e")
             runCatching { startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
                 .onFailure {
                     Toast.makeText(this, "无法打开系统设置，请手动允许本应用后台运行", Toast.LENGTH_LONG).show()
                 }
-                .isSuccess
         }
     }
 
     private fun onStartClicked() {
-        if (!isIgnoringBatteryOptimizations()) {
-            // 先引导加白；拉起成功就等 onResume 回来再启动，不把加白当硬门槛
-            pendingStartAfterWhitelist = true
-            if (!requestIgnoreBatteryOptimizations()) {
-                pendingStartAfterWhitelist = false
-                beginStart()
-            }
-            return
-        }
-        beginStart()
-    }
-
-    private fun beginStart() {
         val intent: Intent? = VpnService.prepare(this)
         if (intent != null) {
             wantVpn = true
@@ -229,6 +204,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun startVpn() {
         CcspeedVpnService.start(this)
+        // 放在 VPN 拉起之后：VpnService 授权弹窗先走完，再引导电池优化白名单，
+        // 避免两层系统对话框叠加（也让 CI 的 AVD 验收链保持原有「点启动→授权」流程）。
+        if (!isIgnoringBatteryOptimizations()) {
+            Log.i(TAG, "not whitelisted, prompting battery optimization whitelist")
+            requestIgnoreBatteryOptimizations()
+        }
         val shellVer = BuildConfig.VERSION_NAME
         val coreVer = CcspeedRuntime.coreVersion(this)
         // 去重：BuildConfig.VERSION_NAME 已含 v 前缀，coreVersion 也带 v，取其一即可
