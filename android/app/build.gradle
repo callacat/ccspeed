@@ -17,7 +17,7 @@ android {
 
     defaultConfig {
         applicationId 'com.callacat.ccspeed'
-        minSdk 24
+        minSdk 33
         targetSdk 34
         versionCode ciVersionCode
         // versionName 由 CI 注入（-PversionName=$GITHUB_REF_NAME），本地构建回退 1.0.0
