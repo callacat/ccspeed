@@ -134,13 +134,36 @@ jobs:
           echo "jniLibs secrets clean"
       - name: Assemble debug APK
         working-directory: android
-        run: ./gradlew assembleDebug --no-daemon -PversionName=${{ github.ref_name }}
+        run: ./gradlew assembleDebug --no-daemon -PversionName=${{ github.ref_name }} -PversionCode=${{ github.run_number }}
       - name: List APK
         working-directory: android
         run: ls -la app/build/outputs/apk/debug/
       - name: SHA256 APK
         working-directory: android
         run: sha256sum app/build/outputs/apk/debug/app-debug.apk
+      - name: Verify signing + versionCode
+        working-directory: android
+        run: |
+          set -e
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          SDK="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          BT=$(ls -d "$SDK"/build-tools/* | sort -V | tail -1)
+          "$BT/apksigner" verify --print-certs "$APK"
+          # APK 实际签名证书指纹（v1 为 "Signer #1"、v2 为 "V2 Signer"，统一按后缀取）
+          GOT=$("$BT/apksigner" verify --print-certs "$APK" \
+            | sed -n 's/.*certificate SHA-256 digest: //p' | head -1 \
+            | tr -d ':' | tr '[:lower:]' '[:upper:]')
+          # 入库固定 debug keystore 的证书指纹，断言二者一致 -> 跨次构建签名稳定
+          EXPECTED=$(keytool -list -v -keystore keystore/ccspeed-debug.jks -storepass android \
+            | sed -n 's/.*SHA256: //p' | head -1 \
+            | tr -d ':' | tr '[:lower:]' '[:upper:]')
+          echo "apk cert SHA-256     : $GOT"
+          echo "keystore cert SHA-256: $EXPECTED"
+          [ -n "$GOT" ] && [ "$GOT" = "$EXPECTED" ] || { echo "FATAL: APK 签名与入库 debug keystore 不一致（跨次构建将 cannot-update）"; exit 1; }
+          "$BT/aapt" dump badging "$APK" | grep -E '^package:'
+          VC=$("$BT/aapt" dump badging "$APK" | sed -n "s/^package:.*versionCode='\([0-9]*\)'.*/\1/p")
+          echo "apk versionCode      : $VC"
+          [ -n "$VC" ] && [ "$VC" -gt 1 ] || { echo "FATAL: versionCode 未由 CI 注入 (got '$VC')"; exit 1; }
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
@@ -165,7 +188,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v3
       - name: Assemble debug APK
         working-directory: android
-        run: ./gradlew assembleDebug --no-daemon -PversionName=${{ github.ref_name }}
+        run: ./gradlew assembleDebug --no-daemon -PversionName=${{ github.ref_name }} -PversionCode=${{ github.run_number }}
       - name: Enable KVM
         run: |
           set -e
@@ -209,7 +232,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v3
       - name: Build Android debug APK
         working-directory: android
-        run: ./gradlew assembleDebug --no-daemon -PversionName=${{ github.ref_name }}
+        run: ./gradlew assembleDebug --no-daemon -PversionName=${{ github.ref_name }} -PversionCode=${{ github.run_number }}
       - name: SHA256 APK (release)
         working-directory: android
         run: sha256sum app/build/outputs/apk/debug/app-debug.apk
