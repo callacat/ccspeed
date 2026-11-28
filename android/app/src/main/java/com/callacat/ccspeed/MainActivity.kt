@@ -5,8 +5,11 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.res.ColorStateList
+import android.net.Uri
 import android.net.VpnService
 import android.os.Bundle
+import android.os.PowerManager
+import android.provider.Settings
 import android.util.Log
 import android.widget.TextView
 import android.widget.Toast
@@ -220,6 +223,27 @@ class MainActivity : AppCompatActivity() {
 
     private fun startVpn() {
         CcspeedVpnService.start(this)
+        // 放在 VPN 拉起之后：先走完 VpnService 授权弹窗，再引导电池白名单，避免两层对话框叠加。
+        if (!isIgnoringBatteryOptimizations()) {
+            Log.i(TAG, "not whitelisted, prompting battery optimization whitelist")
+            requestIgnoreBatteryOptimizations()
+        }
+    }
+
+    /** ColorOS 等 ROM 会清理后台 service 导致 VPN 中断，引导用户加白。 */
+    private fun isIgnoringBatteryOptimizations(): Boolean = runCatching {
+        getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName)
+    }.getOrDefault(true)
+
+    private fun requestIgnoreBatteryOptimizations() {
+        runCatching {
+            startActivity(
+                Intent(
+                    Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                    Uri.parse("package:$packageName"),
+                ),
+            )
+        }.onFailure { Log.w(TAG, "battery exemption request failed: $it") }
     }
 
     companion object {
