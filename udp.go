@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/binary"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -9,9 +10,9 @@ import (
 )
 
 // UDP 网关（节点:端口）。
-// 2026-11-28：原 120.232.239.210/125.94.47.254 的 :46405 与同 IP 的 TCP 节点均已失效，
-// 改为与 fallbackNodes 同 IP 的 46405（同一台 CC 服务器另开的 UDP 口）。
-// ⚠️ 尚未真机实测 UDP 数据面（TCP 已实测通过），以 CMP-444 验证为准。
+// 2026-11-28（CMP-444）：CC API 的节点数据只有 host/port，无 UDP 端口字段，
+// 这里的地址是推测值、从未验证可用。DNS 已改走 TCP 隧道（见 dnsOverTCP），
+// 非 53 端口的 UDP 仍走此尽力路径。
 var udpNodes = []string{
 	"106.75.13.238:46405",  // JP
 	"106.75.225.124:46405", // KR
@@ -22,6 +23,66 @@ func xorBytes(b []byte) {
 	for i := range b {
 		b[i] ^= xorKey
 	}
+}
+
+// dnsOverTCP：DNS 查询经节点的 TCP 隧道转发（RFC 1035 TCP 报文，2 字节长度前缀）。
+// 节点的 UDP 转发不可用（CMP-444），但 TCP 隧道实测可用且有节点允许到 53 端口
+// 的 TCP 出站，故 DNS 单独走这条路，不出隧道、不泄漏。
+func dnsOverTCP(ip net.IP, query []byte) ([]byte, error) {
+	last := error(nil)
+	for _, dst := range dnsTargets(ip) {
+		resp, err := dnsExchange(dst, query)
+		if err == nil {
+			return resp, nil
+		}
+		last = err
+	}
+	return nil, last
+}
+
+// dnsTargets：首选请求里的 DNS 服务器；部分节点拒绝到 8.8.8.8:53 的 TCP，
+// 实测 114.114.114.114 在全部节点可达，作统一回退。
+func dnsTargets(ip net.IP) []net.IP {
+	out := []net.IP{ip}
+	if !ip.Equal(net.IPv4(114, 114, 114, 114)) {
+		out = append(out, net.IPv4(114, 114, 114, 114))
+	}
+	return out
+}
+
+func dnsExchange(ip net.IP, query []byte) ([]byte, error) {
+	up, node, err := dialNode(st.activeSet())
+	if err != nil {
+		return nil, err
+	}
+	defer up.Close()
+	up.SetDeadline(time.Now().Add(2500 * time.Millisecond))
+	if err := sendConnect(up, st.tunnelID(), ip, 53); err != nil {
+		return nil, err
+	}
+	buf := make([]byte, 2+len(query))
+	binary.BigEndian.PutUint16(buf, uint16(len(query)))
+	copy(buf[2:], query)
+	xorBytes(buf)
+	if _, err := up.Write(buf); err != nil {
+		return nil, err
+	}
+	var lb [2]byte
+	if _, err := io.ReadFull(up, lb[:]); err != nil {
+		return nil, err
+	}
+	xorBytes(lb[:])
+	n := int(binary.BigEndian.Uint16(lb[:]))
+	if n == 0 {
+		return nil, fmt.Errorf("empty dns response")
+	}
+	resp := make([]byte, n)
+	if _, err := io.ReadFull(up, resp); err != nil {
+		return nil, err
+	}
+	xorBytes(resp)
+	log.Printf("dns-over-tcp %s via %s (%s) %dB", ip, node, nodeLabel(node), n)
+	return resp, nil
 }
 
 func handleUDP(c net.Conn, host string, port int, udpNode string) {
@@ -101,6 +162,28 @@ func handleUDP(c net.Conn, host string, port int, udpNode string) {
 		}
 		ip, dport, payload, ok := parseSocksUDP(buf[:n])
 		if !ok {
+			continue
+		}
+		// DNS 走 TCP 隧道：节点 UDP 转发不可用。payload/ip 是 buf 的切片，
+		// 交给 goroutine 前必须复制，否则会被下一轮 ReadFromUDP 覆盖。
+		if dport == 53 && client != nil {
+			go func(dst net.IP, q []byte, who net.Addr) {
+				resp, err := dnsOverTCP(dst, q)
+				if err != nil {
+					log.Printf("dns-over-tcp %s: %v", dst, err)
+					return
+				}
+				out := make([]byte, 0, 10+len(resp))
+				out = append(out, 0, 0, 0, 1)
+				out = append(out, dst.To4()...)
+				out = append(out, 0, 53)
+				out = append(out, resp...)
+				cudp.WriteTo(out, who)
+			}(
+				append(net.IP(nil), ip.To4()...),
+				append([]byte(nil), payload...),
+				client,
+			)
 			continue
 		}
 		frame := make([]byte, 14)
