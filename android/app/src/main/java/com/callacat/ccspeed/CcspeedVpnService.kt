@@ -12,8 +12,6 @@ import android.os.ParcelFileDescriptor
 import android.util.Log
 import hev.htproxy.TProxyService
 import java.io.File
-import java.net.InetSocketAddress
-import java.net.Socket
 
 /**
  * 薄壳 VpnService：建 TUN → 写 hev yml → 交给 libhev-socks5-tunnel 转发到
@@ -67,6 +65,20 @@ class CcspeedVpnService : VpnService() {
             .addDnsServer("1.1.1.1")
             .addDnsServer("223.5.5.5")
             .setBlocking(false)
+        // 关键：本 App（含同 UID 的 ccspeed 子进程）不走 VPN。
+        // 否则 ccspeed dial 节点的出站连接被 tun0 捕获 -> hev -> 127.0.0.1:1081 回环，
+        // 表现为 TCP 建连成功但数据零返回。protect(fd) 那套 IPC 在 API 34 上反射拿不到
+        // receiveFileDescriptor，且跨进程传 fd 远不如这一行可靠。
+        runCatching { builder.addDisallowedApplication(packageName) }
+            .onFailure { Log.w(TAG, "addDisallowedApplication failed: $it") }
+        // 管理面保活：LAN + Tailscale(CGNAT) 不进 TUN，否则 adb/内网设备失联。
+        // excludeRoute 需要 API 33+；更低版本接受全量（用户可临时关 VPN 管理）。
+        if (Build.VERSION.SDK_INT >= 33) {
+            listOf("192.168.0.0/16", "172.16.0.0/12", "100.64.0.0/10").forEach { cidr ->
+                runCatching { builder.excludeRoute(android.net.IpPrefix(cidr)) }
+                    .onFailure { Log.w(TAG, "excludeRoute $cidr failed: $it") }
+            }
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             runCatching { builder.setMetered(false) }
         }
@@ -80,9 +92,6 @@ class CcspeedVpnService : VpnService() {
         }
         tun = fd
         Log.i(TAG, "tun up fd=${fd.fd}")
-
-        // Protect ADB socket (port 5555) from VPN routing so ADB over TCP stays connected
-        protectAdbSocket()
 
         val yml = writeHevConfig()
         val ok = runCatching { TProxyService.TProxyStartService(yml, fd.fd) }
@@ -139,23 +148,7 @@ class CcspeedVpnService : VpnService() {
         runCatching { TProxyService.TProxyStopService() }
         runCatching { tun?.close() }
         tun = null
-        adbSocket?.close()
-        adbSocket = null
     }
-
-    /** Protect ADB socket (port 5555) from VPN routing so ADB over TCP stays connected */
-    private fun protectAdbSocket() {
-        if (adbSocket != null) return
-        runCatching {
-            val socket = Socket()
-            socket.connect(InetSocketAddress("127.0.0.1", 5555), 2000)
-            protect(socket)
-            adbSocket = socket
-            Log.i(TAG, "ADB socket protected")
-        }.onFailure { Log.w(TAG, "Failed to protect ADB socket: $it") }
-    }
-
-    private var adbSocket: Socket? = null
 
     private fun startForegroundNotify() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
