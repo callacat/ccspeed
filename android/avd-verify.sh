@@ -17,6 +17,25 @@ EGRESS_URL=${EGRESS_URL:-https://ifconfig.me/ip}
 
 say() { echo "=== $* ==="; }
 
+# CMP-446 UI 验收：控制台打开/返回 + 深/浅色主界面截图（产物随 CI artifact 上传）。
+SHOTS="$(cd "$(dirname "$0")" && pwd)/screenshots"
+mkdir -p "$SHOTS"
+
+set_night() { adb shell cmd uimode night "$1" >/dev/null 2>&1 || true; }
+
+capture_main() {
+    local mode="$1" name="$2"
+    set_night "$mode"
+    adb shell am force-stop "$PKG" >/dev/null 2>&1
+    adb shell am start -W -n "$PKG/.MainActivity" >/dev/null 2>&1
+    sleep 3
+    adb exec-out screencap -p > "$SHOTS/$name.png"
+    echo "screenshot: $SHOTS/$name.png ($(stat -c%s "$SHOTS/$name.png" 2>/dev/null || echo 0) bytes)"
+    adb shell uiautomator dump /sdcard/du.xml >/dev/null 2>&1
+    adb pull /sdcard/du.xml "$SHOTS/$name.xml" >/dev/null 2>&1
+    echo "ui dump: $SHOTS/$name.xml"
+}
+
 FAILURES=()
 fail() { echo "FAIL: $*"; FAILURES+=("$*"); }
 
@@ -242,6 +261,31 @@ else
 fi
 else
     echo "WARN: 无法获取已安装 APK 路径"
+fi
+
+say "CMP-446 控制台打开 / 返回"
+adb shell am start -W -n "$PKG/.MainActivity" >/dev/null 2>&1
+sleep 3
+CONSOLE_OK=0
+for i in 1 2 3; do
+    tap_via_uiautomator "ui_console_${i}.xml" "控制台" || true
+    sleep 2
+    RESUMED="$(adb shell dumpsys activity activities | grep -E "ResumedActivity" | head -2)"
+    echo "resumed[$i]: $RESUMED"
+    if echo "$RESUMED" | grep -q "ConsoleActivity"; then CONSOLE_OK=1; break; fi
+done
+if [ "$CONSOLE_OK" = "1" ]; then
+    adb exec-out screencap -p > "$SHOTS/console.png"
+    echo "screenshot: $SHOTS/console.png ($(stat -c%s "$SHOTS/console.png" 2>/dev/null || echo 0) bytes)"
+    adb shell input keyevent KEYCODE_BACK
+    sleep 1
+    BACK_STATE="$(adb shell dumpsys activity activities | grep -E "ResumedActivity" | head -1)"
+    echo "after back: $BACK_STATE"
+    echo "$BACK_STATE" | grep -q "MainActivity" \
+        && echo "console back -> MainActivity OK" \
+        || echo "WARN: 返回后未见 MainActivity"
+else
+    echo "WARN: 控制台未打开（点击未生效），返回判定跳过"
 fi
 
 say "结果"
