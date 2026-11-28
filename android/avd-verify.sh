@@ -48,6 +48,9 @@ capture_main() {
     sleep 3
     adb exec-out screencap -p > "$SHOTS/$name.png"
     echo "screenshot: $SHOTS/$name.png ($(stat -c%s "$SHOTS/$name.png" 2>/dev/null || echo 0) bytes)"
+    adb shell uiautomator dump /sdcard/du.xml >/dev/null 2>&1
+    adb pull /sdcard/du.xml "$SHOTS/$name.xml" >/dev/null 2>&1
+    echo "ui dump: $SHOTS/$name.xml"
 }
 
 say "adb devices"
@@ -203,18 +206,27 @@ fi
 
 say "CMP-446 控制台打开 / 返回"
 adb shell am start -W -n "$PKG/.MainActivity" >/dev/null 2>&1
-sleep 2
-if tap_via_uiautomator ui_console.xml "控制台"; then
-    sleep 3
+sleep 3
+CONSOLE_OK=0
+for i in 1 2 3; do
+    tap_via_uiautomator "ui_console_${i}.xml" "控制台" || true
+    sleep 2
+    RESUMED="$(adb shell dumpsys activity activities | grep -E "ResumedActivity" | head -2)"
+    echo "resumed[$i]: $RESUMED"
+    if echo "$RESUMED" | grep -q "ConsoleActivity"; then CONSOLE_OK=1; break; fi
+done
+if [ "$CONSOLE_OK" = "1" ]; then
     adb exec-out screencap -p > "$SHOTS/console.png"
-    echo "screenshot: $SHOTS/console.png"
+    echo "screenshot: $SHOTS/console.png ($(stat -c%s "$SHOTS/console.png" 2>/dev/null || echo 0) bytes)"
     adb shell input keyevent KEYCODE_BACK
     sleep 1
-    adb shell dumpsys activity activities | grep -q "mResumedActivity.*MainActivity" \
+    BACK_STATE="$(adb shell dumpsys activity activities | grep -E "ResumedActivity" | head -1)"
+    echo "after back: $BACK_STATE"
+    echo "$BACK_STATE" | grep -q "MainActivity" \
         && echo "console back -> MainActivity OK" \
         || echo "WARN: 返回后未见 MainActivity"
 else
-    echo "WARN: 未找到控制台入口"
+    echo "WARN: 控制台未打开（点击未生效），返回判定跳过"
 fi
 
 echo "gate 完成"
