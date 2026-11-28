@@ -34,8 +34,7 @@ class CcspeedVpnService : VpnService() {
         }
         startForegroundNotify()
         Log.i(TAG, "startForegroundNotify done")
-        // 顺序调整：先建 TUN/VPN（protectSocket 需 VPN 已建立），再起 ccspeed。
-        // 这样 Web 控制台套接字可被 protectSocket 排除 VPN 路由。
+        // 先建 TUN/VPN 再起 ccspeed；ccspeed 子进程与本 App 同 UID 已被 disallow，出站不经 tun0。
         // SOCKS5 (1081) 短暂无监听，但 hev-socks5-tunnel 连接有重试，可接受。
         establishTunAndForward()
         Log.i(TAG, "after establishTunAndForward")

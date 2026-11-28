@@ -24,7 +24,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -69,11 +68,6 @@ func (s *state) udp() string {
 
 var st = &state{}
 
-var (
-	protectSocketName string // abstract namespace socket name for protect socket IPC
-	protectConn       net.Conn
-)
-
 func main() {
 	listen := flag.String("listen", "127.0.0.1:1081", "SOCKS5 listen address")
 	node := flag.String("node", "", "fixed CC node host:port (empty = random per connection)")
@@ -93,30 +87,8 @@ func main() {
 	quiet := flag.Bool("quiet", true, "hide logs (set -quiet=false to show)")
 	apiAuth := flag.String("api-auth", envOr(os.Getenv("CC_AUTH"), defaultAPIAuth), "Authorization header (or CC_AUTH)")
 	apiComm := flag.String("api-comm", envOr(os.Getenv("CC_COMM"), defaultAPIComm), "comm header (or CC_COMM)")
-	protectSocketFlag := flag.String("protect-socket", "", "fd number for protect socket IPC with Kotlin side (Android only, passed via socket pair)")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
-
-	protectSocketFd := 0
-	if *protectSocketFlag != "" {
-		var err error
-		protectSocketFd, err = strconv.Atoi(*protectSocketFlag)
-		if err != nil {
-			log.Printf("invalid protect-socket fd: %v", err)
-		}
-	}
-	if protectSocketFd > 0 {
-		// Create a UnixConn from the fd passed via socket pair
-		f := os.NewFile(uintptr(protectSocketFd), "protect-socket")
-		conn, err := net.FileConn(f)
-		if err != nil {
-			log.Printf("failed to create conn from protect socket fd %d: %v", protectSocketFd, err)
-		} else {
-			protectConn = conn
-			log.Printf("using protect socket fd %d", protectSocketFd)
-		}
-		_ = f.Close()
-	}
 
 	if *showVersion {
 		fmt.Println(version)
@@ -461,74 +433,13 @@ func dialNode(nodes []string) (net.Conn, string, error) {
 	var last error
 	for i := 0; i < len(nodes); i++ {
 		n := nodes[(start+i)%len(nodes)]
-		c, err := dialAndProtect(n, 8*time.Second)
+		c, err := net.DialTimeout("tcp", n, 8*time.Second)
 		if err == nil {
 			return c, n, nil
 		}
 		last = err
 	}
 	return nil, "", last
-}
-
-// dialAndProtect creates a TCP connection and protects the socket fd via Kotlin IPC if available.
-func dialAndProtect(addr string, timeout time.Duration) (net.Conn, error) {
-	// Parse host:port
-	host, portStr, err := net.SplitHostPort(addr)
-	if err != nil {
-		return nil, err
-	}
-
-	// Resolve IP
-	ips, err := net.DefaultResolver.LookupIPAddr(context.Background(), host)
-	if err != nil || len(ips) == 0 {
-		// Fallback to direct dial
-		return net.DialTimeout("tcp", addr, timeout)
-	}
-	ip := ips[0].IP
-
-	// Use net.Dialer with Control function to protect socket before connect
-	dialer := &net.Dialer{
-		Timeout: timeout,
-		Control: func(network, address string, c syscall.RawConn) error {
-			if protectConn != nil {
-				return c.Control(func(fd uintptr) {
-					if ok := protectSocketFd(int(fd)); !ok {
-						log.Printf("protectSocket failed for fd=%d, continuing anyway", fd)
-					}
-				})
-			}
-			return nil
-		},
-	}
-
-	return dialer.DialContext(context.Background(), "tcp", net.JoinHostPort(ip.String(), portStr))
-}
-
-// protectSocketFd sends the fd to Kotlin side for VpnService.protect() call via SCM_RIGHTS.
-func protectSocketFd(fd int) bool {
-	if protectConn == nil {
-		return false
-	}
-
-	// Get the underlying UnixConn for SCM_RIGHTS
-	unixConn, ok := protectConn.(*net.UnixConn)
-	if !ok {
-		// Fallback: try to get raw conn via File()
-		f, err := protectConn.(*net.UnixConn).File()
-		if err != nil {
-			return false
-		}
-		defer f.Close()
-		return sendFdViaUnix(f.Fd(), fd)
-	}
-
-	f, err := unixConn.File()
-	if err != nil {
-		return false
-	}
-	defer f.Close()
-
-	return sendFdViaUnix(f.Fd(), fd)
 }
 
 type xorConn struct{ net.Conn }

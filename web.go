@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -14,7 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -320,44 +318,6 @@ func currentCreds() (string, string) { return apiAuthVal, apiCommVal }
 // ---------- 启动 ----------
 
 func startWeb(addr string) {
-	// 支持 fd://<fd> 格式：从 Kotlin 传入已保护的监听套接字文件描述符
-	if strings.HasPrefix(addr, "fd://") {
-		fdStr := strings.TrimPrefix(addr, "fd://")
-		fd, err := strconv.Atoi(fdStr)
-		if err != nil || fd <= 0 {
-			// fd 无效，自建监听套接字并通过 IPC protect
-			log.Printf("web console: fd=%d invalid, creating own listener with protect", fd)
-			startWebWithProtect(addr)
-			return
-		}
-		f := os.NewFile(uintptr(fd), "web-console-listener")
-		ln, err := net.FileListener(f)
-		if err != nil {
-			log.Printf("web console disabled: FileListener failed: %v", err)
-			return
-		}
-		log.Printf("web console (fd) http://%s", ln.Addr())
-		mux := http.NewServeMux()
-		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path != "/" {
-				http.NotFound(w, r)
-				return
-			}
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			w.Write([]byte(uiHTML))
-		})
-		mux.HandleFunc("/api/status", apiStatus)
-		mux.HandleFunc("/api/nodes", apiNodes)
-		mux.HandleFunc("/api/select", apiSelect)
-		mux.HandleFunc("/api/logs", apiLogs)
-		mux.HandleFunc("/api/config", apiConfig)
-		if err := (&http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}).Serve(ln); err != nil {
-			log.Printf("web serve: %v", err)
-		}
-		return
-	}
-
-	// 原有逻辑：host:port 格式
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		log.Printf("web console disabled: -web %q 需要 host:port 或 :port 形态: %v", addr, err)
@@ -392,58 +352,6 @@ func startWeb(addr string) {
 	}
 	log.Printf("web console http://%s", ln.Addr())
 	openBrowser("http://" + ln.Addr().String())
-	if err := (&http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}).Serve(ln); err != nil {
-		log.Printf("web serve: %v", err)
-	}
-}
-
-func startWebWithProtect(addr string) {
-	// Parse host:port from addr (fd://<fd> or host:port)
-	hostPort := strings.TrimPrefix(addr, "fd://")
-	host, portStr, err := net.SplitHostPort(hostPort)
-	if err != nil {
-		log.Printf("web console disabled: invalid addr %q: %v", addr, err)
-		return
-	}
-	if host == "127.0.0.1" {
-		host = "0.0.0.0"
-	}
-	listenAddr := net.JoinHostPort(host, portStr)
-
-	// Use net.ListenConfig with Control function to protect socket before listen
-	lc := net.ListenConfig{
-		Control: func(network, address string, c syscall.RawConn) error {
-			if protectConn != nil {
-				return c.Control(func(fd uintptr) {
-					if ok := protectSocketFd(int(fd)); !ok {
-						log.Printf("web protectSocket failed for fd=%d, continuing anyway", fd)
-					}
-				})
-			}
-			return nil
-		},
-	}
-
-	ln, err := lc.Listen(context.Background(), "tcp", listenAddr)
-	if err != nil {
-		log.Printf("web console disabled: %v", err)
-		return
-	}
-	log.Printf("web console (protected) http://%s", ln.Addr())
-	mux := http.NewServeMux()
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/" {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Write([]byte(uiHTML))
-	})
-	mux.HandleFunc("/api/status", apiStatus)
-	mux.HandleFunc("/api/nodes", apiNodes)
-	mux.HandleFunc("/api/select", apiSelect)
-	mux.HandleFunc("/api/logs", apiLogs)
-	mux.HandleFunc("/api/config", apiConfig)
 	if err := (&http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}).Serve(ln); err != nil {
 		log.Printf("web serve: %v", err)
 	}

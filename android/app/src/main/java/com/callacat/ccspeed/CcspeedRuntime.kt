@@ -2,7 +2,6 @@ package com.callacat.ccspeed
 
 import android.content.Context
 import android.os.Build
-import android.os.ParcelFileDescriptor
 import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -39,9 +38,6 @@ object CcspeedRuntime {
     /** 运行时保存的 Application Context（start 时注入），供 filesDir/crashLogFile 使用 */
     @Volatile
     private var appContext: Context? = null
-    /** VpnService 实例（start 时若传入 VpnService 则保存），供 protectSocket 使用 */
-    @Volatile
-    private var vpnService: android.net.VpnService? = null
 
     /** 崩溃日志文件路径 */
     val crashLogFile: File
@@ -82,80 +78,21 @@ object CcspeedRuntime {
         return true
     }
 
-    /**
-     * 保护文件描述符不被 VPN 路由捕获。
-     * 使用 start() 时保存的 VpnService 实例调用 protect(int)。
-     */
-    fun protectSocket(fd: Int): Boolean {
-        return try {
-            val vpn = vpnService
-            if (vpn == null) {
-                Log.w(TAG, "protectSocket: vpnService not available")
-                false
-            } else {
-                val method = android.net.VpnService::class.java.getDeclaredMethod("protect", Int::class.javaPrimitiveType)
-                method.isAccessible = true
-                val result = method.invoke(vpn, fd) as Boolean
-                Log.i(TAG, "protectSocket fd=$fd result=$result")
-                result
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "protectSocket failed: $e", e)
-            false
-        }
-    }
-
-    /**
-     * 创建并保护控制台 HTTP 监听套接字，返回 ParcelFileDescriptor 传给 Go 进程。
-     * Go 端通过 os.NewFile(uintptr(fd), "") 接管。
-     * 注意：控制台套接字仅供同进程 WebView 访问，不需 protect() 也可工作。
-     * 使用 ParcelFileDescriptor.fromSocket (API 24+) 避免反射。
-     * 但 fromSocket 接受 Socket 而非 ServerSocket，返回 0 让 Go 自建并走 IPC protect。
-     */
-    @Suppress("UNUSED_PARAMETER")
-    fun createProtectedWebSocket(ctx: Context): ParcelFileDescriptor? {
-        return try {
-            val serverSocket = java.net.ServerSocket()
-            serverSocket.setReuseAddress(true)
-            serverSocket.bind(java.net.InetSocketAddress("0.0.0.0", 28981))
-            // fromSocket 只接受 Socket，ServerSocket 需反射获取 fd (Android 10+ 受限)
-            // 返回 0，让 Go 进程自建监听套接字并通过 IPC protect
-            Log.i(TAG, "createProtectedWebSocket: returning 0 (Go will create own socket)")
-            null
-        } catch (e: Exception) {
-            Log.e(TAG, "createProtectedWebSocket failed: $e", e)
-            null
-        }
-    }
-
     @Synchronized
     fun start(ctx: Context): Boolean {
         if (process?.alive() == true) return true
         // 保存 application context 供 filesDir/crashLogFile 使用
         appContext = ctx.applicationContext
-        // 若传入的是 VpnService，保存引用供 protectSocket 使用
-        if (ctx is android.net.VpnService) {
-            vpnService = ctx
-        }
         // 清残留：上次强杀后可能仍有同名进程占端口。两套资产名都 pkill，
         // 因为 ABI 切换（真机→AVD）时上一套名字的进程可能残留。
         killStale()
         val bin = nativeBinary(ctx)
         if (!verifyBinary(bin)) return false
 
-        // 创建 socket pair 用于 Go -> Kotlin protectSocket IPC (API 24+)
-        val protectPair = createProtectSocketPair() ?: return false
-        val kotlinPfd = protectPair[0]
-        val goPfd = protectPair[1]
-        Log.i(TAG, "protectSocket socket pair created: pfd1=${kotlinPfd.fd}, pfd2=${goPfd.fd}")
-
-        // 创建并保护 Web 控制台监听套接字
-        val webPfd = createProtectedWebSocket(ctx)
         val pb = ProcessBuilder(
             bin.absolutePath,
             "-listen", LISTEN,
-            "-web", "fd://${webPfd?.fd ?: 0}",
-            "-protect-socket", "${goPfd.fd}",
+            "-web", WEB,
         ).apply {
             // 与壳同 dataDir，ccspeed.json 由 Web 控制台写到这里
             directory(ctx.filesDir)
@@ -165,74 +102,14 @@ object CcspeedRuntime {
         val started = runCatching { pb.start() }
             .onFailure { Log.e(TAG, "ProcessBuilder.start failed: $it", it) }
             .getOrNull()
-        if (started == null) {
-            runCatching { kotlinPfd.close() }
-            runCatching { goPfd.close() }
-            return false
-        }
+        if (started == null) return false
         process = started
         _running.value = true
-
-        // 启动 IPC 处理线程（使用 kotlinPfd 接收 Go 发来的 fd）
-        Thread({ handleProtectSocketRequests(kotlinPfd) }, "ccspeed-protect-ipc")
-            .apply { isDaemon = true }.start()
 
         Thread({ drainLog(started) }, "ccspeed-log").apply { isDaemon = true }.start()
         lastLog = "started alive=${started.isAlive()}"
         Log.i(TAG, lastLog)
         return true
-    }
-
-    /** 创建用于与 Go 进程传递文件描述符的 socket pair (API 24+)。 */
-    private fun createProtectSocketPair(): Array<ParcelFileDescriptor>? {
-        return try {
-            ParcelFileDescriptor.createSocketPair()
-        } catch (e: Exception) {
-            Log.w(TAG, "createSocketPair failed (API < 24?), falling back to LocalServerSocket: $e")
-            null
-        }
-    }
-
-    /** 处理 Go 进程发来的 protectSocket 请求（使用 ParcelFileDescriptor.receiveFileDescriptor，API 24+）。 */
-    private fun handleProtectSocketRequests(pfd: ParcelFileDescriptor) {
-        try {
-            val input = ParcelFileDescriptor.AutoCloseInputStream(pfd)
-            val output = ParcelFileDescriptor.AutoCloseOutputStream(pfd)
-
-            // 通过反射获取 receiveFileDescriptor 方法 (API 24+)
-            val receiveFdMethod = ParcelFileDescriptor::class.java.getMethod("receiveFileDescriptor")
-
-            while (true) {
-                // 读取命令字节: 1=PROTECT_FD (后跟 SCM_RIGHTS fd), 0=PING
-                val cmd = input.read()
-                if (cmd == -1) break // EOF
-                if (cmd == 1) { // PROTECT_FD
-                    // 通过反射接收文件描述符 (API 24+)
-                    val receivedPfd = try {
-                        receiveFdMethod.invoke(pfd) as? ParcelFileDescriptor
-                    } catch (e: Exception) {
-                        Log.w(TAG, "receiveFileDescriptor failed: $e")
-                        null
-                    }
-                    val ok = receivedPfd?.let {
-                        try {
-                            protectSocket(it.fd)
-                        } finally {
-                            runCatching { it.close() }
-                        }
-                    } ?: false
-                    output.write(if (ok) 1 else 0)
-                    output.flush()
-                } else if (cmd == 0) { // PING
-                    output.write(1)
-                    output.flush()
-                }
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "protectSocket IPC ended: $e")
-        } finally {
-            runCatching { pfd.close() }
-        }
     }
 
     @Synchronized
