@@ -149,7 +149,9 @@ jobs:
           retention-days: 7
 
   android-emulator:
-    needs: [vet]
+    # 测的必须是 android job 产出的同一个 APK（含从源码重建的 libccspeed.so），
+    # 而不是仓里可能过期的 jniLibs；CMP-442 后 emulator 门是硬门，必须能拦住假通。
+    needs: [android]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -158,14 +160,14 @@ jobs:
         with:
           fetch-depth: 0
           clean: true
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-      - uses: gradle/actions/setup-gradle@v3
-      - name: Assemble debug APK
+      - name: Gate logic self-test
         working-directory: android
-        run: ./gradlew assembleDebug --no-daemon -PversionName=${{ github.ref_name }}
+        run: bash test-avd-verify.sh
+      - name: Download APK built by android job
+        uses: actions/download-artifact@v4
+        with:
+          name: app-debug-apk
+          path: android/app/build/outputs/apk/debug/
       - name: Enable KVM
         run: |
           set -e
@@ -189,7 +191,7 @@ jobs:
             bash avd-verify.sh
 
   release:
-    needs: [build, android]
+    needs: [build, android, android-emulator]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
