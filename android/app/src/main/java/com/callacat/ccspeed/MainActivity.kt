@@ -4,8 +4,11 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.net.Uri
 import android.net.VpnService
 import android.os.Bundle
+import android.os.PowerManager
+import android.provider.Settings
 import android.widget.Button
 import android.widget.TextView
 import android.util.Log
@@ -19,6 +22,7 @@ import kotlinx.coroutines.launch
 class MainActivity : AppCompatActivity() {
     private lateinit var status: TextView
     private lateinit var modeSummary: TextView
+    private lateinit var batteryStatus: TextView
     private var wantVpn = false
     private lateinit var toggle: Button
     private val vpnConflictReceiver = object : BroadcastReceiver() {
@@ -84,11 +88,29 @@ class MainActivity : AppCompatActivity() {
                 startActivity(Intent(this@MainActivity, PerAppProxyActivity::class.java))
             }
         }
+        batteryStatus = TextView(this).apply {
+            textSize = 14f
+            setPadding(0, 24, 0, 8)
+        }
+        val keepAlive = Button(this).apply {
+            text = "后台保活设置"
+            setOnClickListener { requestIgnoreBatteryOptimizations() }
+        }
+        val colorOsHint = TextView(this).apply {
+            textSize = 13f
+            setText(
+                "ColorOS 额外设置：设置 → 应用管理 → 本应用 → 耗电管理/允许后台活动 打开；" +
+                    "再在最近任务卡片下拉锁定本应用，防止清理后台时被带走。",
+            )
+        }
         root.addView(status)
         root.addView(modeSummary)
         root.addView(toggle)
         root.addView(perApp)
         root.addView(console)
+        root.addView(keepAlive)
+        root.addView(batteryStatus)
+        root.addView(colorOsHint)
         setContentView(root)
 
         // Observe runtime running state to keep button text in sync
@@ -103,11 +125,47 @@ class MainActivity : AppCompatActivity() {
         super.onResume()
         // 从分应用选择页返回时刷新摘要（全量 / 仅 N 个应用）
         modeSummary.text = PerAppConfig.summary(this)
+        refreshBatteryStatus()
     }
 
     override fun onDestroy() {
         super.onDestroy()
         try { unregisterReceiver(vpnConflictReceiver) } catch (_: Throwable) {}
+    }
+
+    private fun isIgnoringBatteryOptimizations(): Boolean {
+        val pm = getSystemService(PowerManager::class.java) ?: return false
+        return pm.isIgnoringBatteryOptimizations(packageName)
+    }
+
+    private fun refreshBatteryStatus() {
+        batteryStatus.text = if (isIgnoringBatteryOptimizations()) {
+            "后台保活：已加入电池优化白名单"
+        } else {
+            "后台保活：未加白，锁屏/清后台后可能被系统杀掉"
+        }
+    }
+
+    private fun requestIgnoreBatteryOptimizations() {
+        if (isIgnoringBatteryOptimizations()) {
+            Toast.makeText(this, "已在电池优化白名单中", Toast.LENGTH_SHORT).show()
+            return
+        }
+        // 需要 REQUEST_IGNORE_BATTERY_OPTIMIZATIONS 权限；少数 ROM 会拒绝对话框，
+        // 回退到电池优化列表页（无需权限），再不行就提示手动设置。
+        val direct = Intent(
+            Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+            Uri.parse("package:$packageName"),
+        )
+        try {
+            startActivity(direct)
+        } catch (e: Exception) {
+            Log.w(TAG, "request ignore battery optimizations failed: $e")
+            runCatching { startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
+                .onFailure {
+                    Toast.makeText(this, "无法打开系统设置，请手动允许本应用后台运行", Toast.LENGTH_LONG).show()
+                }
+        }
     }
 
     private fun onStartClicked() {
@@ -146,6 +204,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun startVpn() {
         CcspeedVpnService.start(this)
+        // 放在 VPN 拉起之后：VpnService 授权弹窗先走完，再引导电池优化白名单，
+        // 避免两层系统对话框叠加（也让 CI 的 AVD 验收链保持原有「点启动→授权」流程）。
+        if (!isIgnoringBatteryOptimizations()) {
+            Log.i(TAG, "not whitelisted, prompting battery optimization whitelist")
+            requestIgnoreBatteryOptimizations()
+        }
         val shellVer = BuildConfig.VERSION_NAME
         val coreVer = CcspeedRuntime.coreVersion(this)
         // 去重：BuildConfig.VERSION_NAME 已含 v 前缀，coreVersion 也带 v，取其一即可
