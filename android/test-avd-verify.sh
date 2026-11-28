@@ -34,6 +34,7 @@ case "$*" in
   *"curl -s -m 20"*) echo "${FAKE_TUNNEL_IP:-}"; exit 0 ;;
   *"command -v curl"*) exit 0 ;;
   *"am force-stop"*|*"stopservice"*) touch "$STATE"; exit 0 ;;
+  *"am start"*) rm -f "$STATE"; exit 0 ;;
   *"ip -o addr show tun0"*) [ -n "${FAKE_TUN0:-}" ] && [ ! -f "$STATE" ] && echo "$FAKE_TUN0"; exit 0 ;;
   *"ps -A"*) [ -n "${FAKE_NATIVE:-}" ] && echo "$FAKE_NATIVE"; exit 0 ;;
   *":0439 "*) [ -n "${FAKE_SOCKS:-}" ] && echo "$FAKE_SOCKS"; exit 0 ;;

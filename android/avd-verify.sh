@@ -100,6 +100,11 @@ say "launch MainActivity"
 adb shell am start -W -n "$PKG/.MainActivity"
 sleep 5
 
+say "CMP-446 主界面截图（浅色 + 深色）"
+capture_main no main-light
+capture_main yes main-dark
+set_night no
+
 say "tap 启动 -> VpnService.prepare 弹窗（uiautomator 起不来时退回 wakeup + 屏幕中心 tap）"
 if ! tap_via_uiautomator ui.xml "启动" "Start"; then
     echo "WARN: uiautomator 首次未命中，用中心坐标兜底"
