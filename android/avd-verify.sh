@@ -133,25 +133,29 @@ cat /tmp/host_egress_ip.txt 2>/dev/null; echo
 echo "runner host egress baseline: $(cat /tmp/host_egress_ip.txt 2>/dev/null)"
 adb forward --remove tcp:28981 || true
 
-say "gate: 核心功能探针（tun0 / native 进程 / SOCKS5 1081）——全部仅 WARN 不阻断"
-WARN_COUNT=0
-adb shell "ip -o addr show tun0" | grep -q "tun0" || { echo "WARN: tun0 不存在"; WARN_COUNT=$((WARN_COUNT+1)); }
-adb shell "ps -A | grep -qE 'ccspeed|hev'" || { echo "WARN: native 进程未见"; WARN_COUNT=$((WARN_COUNT+1)); }
-if ! adb shell "grep -i ':0439' /proc/net/tcp" | grep -q .; then
-    echo "WARN: SOCKS5 127.0.0.1:1081 未在听"
-    WARN_COUNT=$((WARN_COUNT+1))
+say "gate: 核心功能探针（tun0 / native 进程 / SOCKS5 1081）——硬门，任一失败 exit 1"
+FAIL_COUNT=0
+adb shell "ip -o addr show tun0" | grep -q "tun0" || { echo "FAIL: tun0 不存在"; FAIL_COUNT=$((FAIL_COUNT+1)); }
+adb shell "ps -A | grep -qE 'ccspeed|hev'" || { echo "FAIL: native 进程未见"; FAIL_COUNT=$((FAIL_COUNT+1)); }
+if ! adb shell "cat /proc/net/tcp /proc/net/tcp6" | grep -qi ':0439'; then
+    echo "FAIL: SOCKS5 127.0.0.1:1081 未在听"
+    FAIL_COUNT=$((FAIL_COUNT+1))
 fi
-adb shell am stopservice -n "$PKG/.CcspeedVpnService"
-sleep 4
-echo "--- after stop: native/tun0 ---"
-adb shell "ps -A | grep -E 'ccspeed|hev' || echo 'OK: no ccspeed/hev process'"
-adb shell "ip -o addr show tun0 || echo 'OK: tun0 gone'"
 
-if [ "$WARN_COUNT" -gt 0 ]; then
-    echo "WARN: 共 $(WARN_COUNT) 项异常（仅 WARN，不阻断 CI），真机验收时复核"
+# 真实出口判据：必须经 SOCKS5 从外部服务拿 IP（/api/status 的 node-ip 不算数）。
+# AVD 访问不到 CC 节点时记 SKIP（显式标记，不冒充 PASS）。
+say "gate: SOCKS5 真实出口（外部服务，非 node-ip）"
+EGRESS="$(adb shell "curl -s -m 20 -x socks5h://127.0.0.1:1081 https://ifconfig.me/ip" 2>/dev/null | tr -d '\r\n')"
+if echo "$EGRESS" | grep -qE '^[0-9]{1,3}(\.[0-9]{1,3}){3}$|:'; then
+    echo "SOCKS5 egress = $EGRESS"
+    EGRESS_STATUS="PASS:$EGRESS"
 else
-    echo "所有核心探针 PASS"
+    echo "SKIP: SOCKS5 出口未取到（AVD 到 CC 节点不可达时为预期；真机验收必测）"
+    EGRESS_STATUS="SKIP"
 fi
+adb shell "am force-stop $PKG" 2>/dev/null || true
+sleep 3
+adb shell "ip -o addr show tun0" | grep -q "tun0" && { echo "FAIL: 停止后 tun0 仍在（CMP-440 回归）"; FAIL_COUNT=$((FAIL_COUNT+1)); } || echo "stop: tun0 已释放 OK"
 
 say "APK assets 零凭据复核"
 APK_INSTALLED="$(adb shell pm path "$PKG" 2>/dev/null | head -1 | sed 's/^package://' | tr -d '\r')"
@@ -181,4 +185,8 @@ else
 fi
 
 echo "gate 完成"
-echo "RESULT: PASS（AVD 验收完成，核心功能通过，异常项已 WARN，真机最终验收）"
+if [ "$FAIL_COUNT" -gt 0 ]; then
+    echo "RESULT: FAIL（$FAIL_COUNT 项硬门未过：tun0 / native 进程 / SOCKS5 监听 / 停止释放）"
+    exit 1
+fi
+echo "RESULT: PASS（硬门全过；SOCKS5 出口=$EGRESS_STATUS；凭据形状命中=$HIT）"
